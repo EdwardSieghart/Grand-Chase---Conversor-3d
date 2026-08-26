@@ -1,0 +1,39 @@
+# Saida de conversao e de validacao
+/out/
+/dist/
+
+# Artefatos do PyInstaller (o .spec e versionado; o resto nao)
+/build/pyinstaller/
+/build/gc3d/
+/build/gc3d-gui/
+*.manifest
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+
+# Ferramentas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Arquivos convertidos soltos na raiz
+/*.glb
+/*.gltf
+
+# Blender
+*.blend1
