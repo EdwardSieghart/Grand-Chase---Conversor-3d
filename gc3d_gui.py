@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """Interface grafica do Grand Chase 3D Importer.
 
+Tela unica, tema escuro, e o sentido da conversao deduzido do que for carregado:
+
+* entram `.p3m` e `.frm`  ->  sai `.glb`
+* entra  `.glb` / `.gltf` ->  saem `.p3m` e `.frm`
+
+Nao ha botao de escolher o sentido: dado o que o usuario carregou, so existe um
+destino possivel, e perguntar seria redundante.
+
 Usa apenas tkinter, que vem junto com o Python no Windows e esta disponivel em
-qualquer distribuicao Linux. Isso mantem o programa com zero dependencias e faz
-o executavel empacotado ficar pequeno.
+qualquer distribuicao Linux. Isso mantem o programa com zero dependencias e faz o
+executavel empacotado ficar pequeno. O tema escuro e aplicado a mao, porque o
+tkinter nao tem um: o tema "clam" e recolorido widget por widget, e o mesmo
+codigo produz a mesma aparencia no Linux e no Windows.
 
 A conversao roda em uma thread separada para a janela nao congelar; a thread
 nunca toca em widgets diretamente, apenas empilha mensagens numa fila que a
-thread da interface consome a cada 100 ms. Esse e o unico jeito seguro de
+thread da interface consome a cada 80 ms. Esse e o unico jeito seguro de
 atualizar tkinter de outra thread.
 
 Executar:
@@ -30,229 +40,461 @@ if os.path.isdir(_SRC) and _SRC not in sys.path:
 
 from gc3d import (  # noqa: E402
     ConvertOptions,
+    Direction,
     __version__,
+    classify_path,
     collect_inputs,
     convert_model,
-    find_animations_for_model,
+    convert_to_gc,
 )
 
 APP_TITLE = f"Grand Chase 3D Importer {__version__}"
 
 
+class Dark:
+    """Paleta do tema escuro.
+
+    Valores fixos de proposito: seguir o tema do sistema exigiria detectar
+    GTK/Windows e ainda assim o tkinter nao acompanharia. Uma paleta propria
+    garante a mesma aparencia nas duas plataformas.
+    """
+
+    BG = "#1e1f22"
+    SURFACE = "#2b2d31"
+    SURFACE_HI = "#35373c"
+    BORDER = "#45474d"
+    FG = "#e3e5e8"
+    FG_MUTED = "#9a9ca1"
+    ACCENT = "#4a9eff"
+    ACCENT_HOVER = "#63aeff"
+    OK = "#57c46b"
+    WARN = "#e3b341"
+    ERROR = "#f2555a"
+    SELECT_BG = "#3d4d63"
+
+
+def apply_dark_theme(root: tk.Tk) -> None:
+    """Recolore o tema `clam` para escuro, em todas as plataformas."""
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+
+    root.configure(bg=Dark.BG)
+
+    style.configure(".", background=Dark.BG, foreground=Dark.FG)
+    style.configure("TFrame", background=Dark.BG)
+    style.configure("TLabel", background=Dark.BG, foreground=Dark.FG)
+    style.configure(
+        "Muted.TLabel", background=Dark.BG, foreground=Dark.FG_MUTED
+    )
+    style.configure(
+        "Heading.TLabel",
+        background=Dark.BG,
+        foreground=Dark.FG,
+        font=("TkDefaultFont", 11, "bold"),
+    )
+    style.configure(
+        "Direction.TLabel",
+        background=Dark.SURFACE,
+        foreground=Dark.ACCENT,
+        font=("TkDefaultFont", 10, "bold"),
+        padding=8,
+        relief="flat",
+    )
+
+    style.configure(
+        "TLabelframe",
+        background=Dark.BG,
+        foreground=Dark.FG,
+        bordercolor=Dark.BORDER,
+        darkcolor=Dark.BG,
+        lightcolor=Dark.BG,
+    )
+    style.configure(
+        "TLabelframe.Label", background=Dark.BG, foreground=Dark.FG_MUTED
+    )
+
+    style.configure(
+        "TButton",
+        background=Dark.SURFACE,
+        foreground=Dark.FG,
+        bordercolor=Dark.BORDER,
+        darkcolor=Dark.SURFACE,
+        lightcolor=Dark.SURFACE,
+        focuscolor=Dark.ACCENT,
+        padding=(10, 5),
+        relief="flat",
+    )
+    style.map(
+        "TButton",
+        background=[
+            ("disabled", Dark.BG),
+            ("pressed", Dark.BORDER),
+            ("active", Dark.SURFACE_HI),
+        ],
+        foreground=[("disabled", Dark.FG_MUTED)],
+    )
+
+    style.configure(
+        "Accent.TButton",
+        background=Dark.ACCENT,
+        foreground="#ffffff",
+        bordercolor=Dark.ACCENT,
+        darkcolor=Dark.ACCENT,
+        lightcolor=Dark.ACCENT,
+        padding=(14, 7),
+        relief="flat",
+        font=("TkDefaultFont", 10, "bold"),
+    )
+    style.map(
+        "Accent.TButton",
+        background=[
+            ("disabled", Dark.SURFACE),
+            ("pressed", "#3a86e0"),
+            ("active", Dark.ACCENT_HOVER),
+        ],
+        foreground=[("disabled", Dark.FG_MUTED)],
+    )
+
+    style.configure(
+        "TEntry",
+        fieldbackground=Dark.SURFACE,
+        foreground=Dark.FG,
+        bordercolor=Dark.BORDER,
+        lightcolor=Dark.BORDER,
+        darkcolor=Dark.BORDER,
+        insertcolor=Dark.FG,
+        padding=5,
+    )
+
+    style.configure(
+        "TCheckbutton",
+        background=Dark.BG,
+        foreground=Dark.FG,
+        indicatorbackground=Dark.SURFACE,
+        indicatorforeground=Dark.ACCENT,
+        focuscolor=Dark.BG,
+    )
+    style.map(
+        "TCheckbutton",
+        background=[("active", Dark.BG)],
+        indicatorbackground=[
+            ("selected", Dark.ACCENT),
+            ("active", Dark.SURFACE_HI),
+        ],
+    )
+
+    style.configure(
+        "TProgressbar",
+        background=Dark.ACCENT,
+        troughcolor=Dark.SURFACE,
+        bordercolor=Dark.SURFACE,
+        darkcolor=Dark.ACCENT,
+        lightcolor=Dark.ACCENT,
+        thickness=8,
+    )
+
+    style.configure(
+        "Vertical.TScrollbar",
+        background=Dark.SURFACE,
+        troughcolor=Dark.BG,
+        bordercolor=Dark.BG,
+        arrowcolor=Dark.FG_MUTED,
+        darkcolor=Dark.SURFACE,
+        lightcolor=Dark.SURFACE,
+    )
+    style.map(
+        "Vertical.TScrollbar",
+        background=[("active", Dark.SURFACE_HI)],
+    )
+
+
 class ConverterApp(ttk.Frame):
-    """Janela principal."""
+    """Janela principal: uma tela, uma lista, um botao."""
 
     def __init__(self, master: tk.Tk) -> None:
-        super().__init__(master, padding=10)
+        super().__init__(master, padding=14)
         self.master.title(APP_TITLE)
-        self.master.minsize(760, 560)
+        self.master.minsize(820, 620)
         self.grid(sticky="nsew")
         master.columnconfigure(0, weight=1)
         master.rowconfigure(0, weight=1)
 
-        # Estado
-        self.model_paths: list[str] = []
-        self.animation_paths: list[str] = []
-        self.output_dir = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "gc3d_saida"))
-        self.embed_texture = tk.BooleanVar(value=True)
-        self.auto_animations = tk.BooleanVar(value=True)
-        self.double_sided = tk.BooleanVar(value=True)
+        #: Caminhos carregados, em ordem de insercao.
+        self.paths: list[str] = []
+        self.output_dir = tk.StringVar(
+            value=os.path.join(os.path.expanduser("~"), "gc3d_saida")
+        )
+        self.direction_text = tk.StringVar()
         self.status = tk.StringVar(value="Pronto.")
         self.progress_value = tk.DoubleVar(value=0.0)
+        self.with_texture = tk.BooleanVar(value=True)
 
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
 
         self._build_ui()
-        self.after(100, self._drain_queue)
+        self._refresh_direction()
+        self.after(80, self._drain_queue)
 
     # ------------------------------------------------------------------- UI
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(2, weight=3)
+        self.rowconfigure(5, weight=2)
 
-        # --- Modelos
-        models_frame = ttk.LabelFrame(self, text="Modelos (.p3m)", padding=8)
-        models_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        models_frame.columnconfigure(0, weight=1)
+        # ---- cabecalho
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(
+            header,
+            text="Arquivos a converter",
+            style="Heading.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            header,
+            text="Aceita .p3m, .frm, .glb e .gltf — o sentido e detectado sozinho",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
 
-        self.models_list = tk.Listbox(models_frame, height=5, selectmode=tk.EXTENDED)
-        self.models_list.grid(row=0, column=0, sticky="ew")
-        models_scroll = ttk.Scrollbar(
-            models_frame, orient="vertical", command=self.models_list.yview
+        # ---- indicador de direcao
+        self.direction_label = ttk.Label(
+            self, textvariable=self.direction_text, style="Direction.TLabel"
         )
-        models_scroll.grid(row=0, column=1, sticky="ns")
-        self.models_list.configure(yscrollcommand=models_scroll.set)
+        self.direction_label.grid(row=1, column=0, sticky="ew", pady=(10, 8))
 
-        model_buttons = ttk.Frame(models_frame)
-        model_buttons.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(model_buttons, text="Adicionar arquivos...", command=self._add_models).pack(
-            side="left"
+        # ---- lista unica
+        list_frame = tk.Frame(
+            self, bg=Dark.BORDER, highlightthickness=0, bd=0
         )
-        ttk.Button(model_buttons, text="Adicionar pasta...", command=self._add_model_dir).pack(
-            side="left", padx=4
-        )
-        ttk.Button(model_buttons, text="Remover selecionados", command=self._remove_models).pack(
-            side="left", padx=4
-        )
-        ttk.Button(model_buttons, text="Limpar", command=self._clear_models).pack(side="left")
+        list_frame.grid(row=2, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
 
-        # --- Animacoes
-        anim_frame = ttk.LabelFrame(self, text="Animacoes (.frm)", padding=8)
-        anim_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        anim_frame.columnconfigure(0, weight=1)
-
-        self.anims_list = tk.Listbox(anim_frame, height=4, selectmode=tk.EXTENDED)
-        self.anims_list.grid(row=0, column=0, sticky="ew")
-        anims_scroll = ttk.Scrollbar(
-            anim_frame, orient="vertical", command=self.anims_list.yview
+        self.file_list = tk.Listbox(
+            list_frame,
+            selectmode=tk.EXTENDED,
+            activestyle="none",
+            bg=Dark.SURFACE,
+            fg=Dark.FG,
+            selectbackground=Dark.SELECT_BG,
+            selectforeground=Dark.FG,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
         )
-        anims_scroll.grid(row=0, column=1, sticky="ns")
-        self.anims_list.configure(yscrollcommand=anims_scroll.set)
-
-        anim_buttons = ttk.Frame(anim_frame)
-        anim_buttons.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(anim_buttons, text="Adicionar arquivos...", command=self._add_anims).pack(
-            side="left"
+        self.file_list.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        list_scroll = ttk.Scrollbar(
+            list_frame, orient="vertical", command=self.file_list.yview
         )
-        ttk.Button(anim_buttons, text="Adicionar pasta...", command=self._add_anim_dir).pack(
-            side="left", padx=4
-        )
-        ttk.Button(anim_buttons, text="Limpar", command=self._clear_anims).pack(side="left")
-        ttk.Checkbutton(
-            anim_buttons,
-            text="Casar automaticamente por numero de ossos",
-            variable=self.auto_animations,
-        ).pack(side="left", padx=(12, 0))
+        list_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
+        self.file_list.configure(yscrollcommand=list_scroll.set)
 
-        # --- Saida e opcoes
-        options_frame = ttk.LabelFrame(self, text="Saida e opcoes", padding=8)
-        options_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        options_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(options_frame, text="Pasta de saida:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(options_frame, textvariable=self.output_dir).grid(
-            row=0, column=1, sticky="ew", padx=6
-        )
-        ttk.Button(options_frame, text="Escolher...", command=self._choose_output).grid(
-            row=0, column=2
-        )
-
-        checks = ttk.Frame(options_frame)
-        checks.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(
-            checks, text="Embutir textura (.dds/.png)", variable=self.embed_texture
+        # ---- botoes da lista
+        buttons = ttk.Frame(self)
+        buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(
+            buttons, text="Adicionar arquivos...", command=self._add_files
         ).pack(side="left")
-        ttk.Checkbutton(
-            checks, text="Faces dos dois lados", variable=self.double_sided
-        ).pack(side="left", padx=(12, 0))
+        ttk.Button(
+            buttons, text="Adicionar pasta...", command=self._add_folder
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            buttons, text="Remover selecionados", command=self._remove_selected
+        ).pack(side="left")
+        ttk.Button(buttons, text="Limpar lista", command=self._clear).pack(
+            side="left", padx=6
+        )
 
-        # --- Log
-        log_frame = ttk.LabelFrame(self, text="Registro", padding=8)
-        log_frame.grid(row=3, column=0, sticky="nsew")
+        # ---- saida
+        output = ttk.LabelFrame(self, text="Pasta de saida", padding=10)
+        output.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        output.columnconfigure(0, weight=1)
+        ttk.Entry(output, textvariable=self.output_dir).grid(
+            row=0, column=0, sticky="ew"
+        )
+        ttk.Button(output, text="Escolher...", command=self._choose_output).grid(
+            row=0, column=1, padx=(8, 0)
+        )
+        ttk.Button(output, text="Abrir", command=self._open_output).grid(
+            row=0, column=2, padx=(6, 0)
+        )
+        ttk.Checkbutton(
+            output,
+            text="Incluir textura (embutir no .glb, ou extrair como .png)",
+            variable=self.with_texture,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        # ---- registro
+        log_frame = ttk.LabelFrame(self, text="Registro", padding=(2, 6, 2, 2))
+        log_frame.grid(row=5, column=0, sticky="nsew", pady=(12, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
-        self.log = tk.Text(log_frame, height=12, wrap="word", state="disabled")
+        self.log = tk.Text(
+            log_frame,
+            height=9,
+            wrap="word",
+            state="disabled",
+            bg=Dark.SURFACE,
+            fg=Dark.FG,
+            insertbackground=Dark.FG,
+            selectbackground=Dark.SELECT_BG,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            padx=8,
+            pady=6,
+        )
         self.log.grid(row=0, column=0, sticky="nsew")
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
+        log_scroll = ttk.Scrollbar(
+            log_frame, orient="vertical", command=self.log.yview
+        )
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log.configure(yscrollcommand=log_scroll.set)
-        self.log.tag_configure("erro", foreground="#b00020")
-        self.log.tag_configure("aviso", foreground="#a06000")
-        self.log.tag_configure("ok", foreground="#006400")
+        self.log.tag_configure("erro", foreground=Dark.ERROR)
+        self.log.tag_configure("aviso", foreground=Dark.WARN)
+        self.log.tag_configure("ok", foreground=Dark.OK)
+        self.log.tag_configure("muted", foreground=Dark.FG_MUTED)
 
-        # --- Rodape
+        # ---- rodape
         footer = ttk.Frame(self)
-        footer.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        footer.columnconfigure(1, weight=1)
+        footer.grid(row=6, column=0, sticky="ew", pady=(12, 0))
+        footer.columnconfigure(2, weight=1)
 
         self.convert_button = ttk.Button(
-            footer, text="Converter", command=self._start_conversion
+            footer,
+            text="Converter",
+            style="Accent.TButton",
+            command=self._start,
         )
         self.convert_button.grid(row=0, column=0)
         self.cancel_button = ttk.Button(
             footer, text="Cancelar", command=self._cancel_conversion, state="disabled"
         )
-        self.cancel_button.grid(row=0, column=1, sticky="w", padx=6)
-        ttk.Button(footer, text="Abrir pasta de saida", command=self._open_output).grid(
-            row=0, column=2, padx=6
+        self.cancel_button.grid(row=0, column=1, padx=8)
+        ttk.Label(footer, textvariable=self.status, style="Muted.TLabel").grid(
+            row=0, column=2, sticky="e"
         )
-
         self.progress = ttk.Progressbar(
             footer, variable=self.progress_value, maximum=100.0
         )
-        self.progress.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        ttk.Label(footer, textvariable=self.status).grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(4, 0)
-        )
+        self.progress.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0))
 
-    # ------------------------------------------------------- selecao de arquivos
+    # ------------------------------------------------------- direcao e lista
 
-    def _add_models(self) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Escolher modelos P3M",
-            filetypes=[("Modelos Grand Chase", "*.p3m"), ("Todos os arquivos", "*.*")],
-        )
-        self._append_models(list(paths))
+    def _counts(self) -> tuple[int, int, int]:
+        models = sum(1 for p in self.paths if classify_path(p) == "p3m")
+        animations = sum(1 for p in self.paths if classify_path(p) == "frm")
+        gltfs = sum(1 for p in self.paths if classify_path(p) == "gltf")
+        return models, animations, gltfs
 
-    def _add_model_dir(self) -> None:
-        directory = filedialog.askdirectory(title="Escolher pasta com modelos P3M")
-        if not directory:
-            return
-        models, _ = collect_inputs([directory], recursive=True)
-        self._append_models(models)
+    def _direction(self) -> str | None:
+        models, animations, gltfs = self._counts()
+        if gltfs:
+            return Direction.TO_GC
+        if models or animations:
+            return Direction.TO_GLTF
+        return None
 
-    def _append_models(self, paths: list[str]) -> None:
+    def _refresh_direction(self) -> None:
+        """Atualiza o indicador de sentido conforme o conteudo da lista."""
+        models, animations, gltfs = self._counts()
+        direction = self._direction()
+
+        if direction is None:
+            self.direction_text.set(
+                "Nenhum arquivo carregado — adicione .p3m/.frm para gerar .glb, "
+                "ou .glb para gerar .p3m/.frm"
+            )
+        elif direction == Direction.TO_GC:
+            extra = ""
+            if models or animations:
+                extra = (
+                    f"  ({models + animations} arquivo(s) do jogo serao ignorados: "
+                    f"nao se mistura os dois sentidos)"
+                )
+            self.direction_text.set(
+                f"GLB -> P3M + FRM     {gltfs} arquivo(s) glTF{extra}"
+            )
+        else:
+            if models:
+                self.direction_text.set(
+                    f"P3M + FRM -> GLB     {models} modelo(s), "
+                    f"{animations} animacao(oes)"
+                )
+            else:
+                self.direction_text.set(
+                    f"P3M + FRM -> GLB     {animations} animacao(oes), mas nenhum "
+                    f"modelo .p3m — adicione o modelo"
+                )
+
+    def _refresh_list(self) -> None:
+        self.file_list.delete(0, "end")
+        labels = {"p3m": "modelo   ", "frm": "animacao ", "gltf": "glTF     "}
+        for path in self.paths:
+            kind = classify_path(path) or "?"
+            self.file_list.insert(
+                "end", f"  {labels.get(kind, 'outro    ')}  {os.path.basename(path)}"
+            )
+        self._refresh_direction()
+
+    def _add_paths(self, paths: list[str]) -> None:
         added = 0
+        ignored = 0
         for path in paths:
-            if path and path not in self.model_paths:
-                self.model_paths.append(path)
-                self.models_list.insert("end", path)
+            if not path:
+                continue
+            if classify_path(path) is None:
+                ignored += 1
+                continue
+            if path not in self.paths:
+                self.paths.append(path)
                 added += 1
+        self._refresh_list()
         if added:
-            self._log(f"{added} modelo(s) adicionado(s). Total: {len(self.model_paths)}.")
-
-    def _remove_models(self) -> None:
-        for index in reversed(self.models_list.curselection()):
-            self.models_list.delete(index)
-            del self.model_paths[index]
-
-    def _clear_models(self) -> None:
-        self.models_list.delete(0, "end")
-        self.model_paths.clear()
-
-    def _add_anims(self) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Escolher animacoes FRM",
-            filetypes=[("Animacoes Grand Chase", "*.frm"), ("Todos os arquivos", "*.*")],
-        )
-        self._append_anims(list(paths))
-
-    def _add_anim_dir(self) -> None:
-        directory = filedialog.askdirectory(title="Escolher pasta com animacoes FRM")
-        if not directory:
-            return
-        _, animations = collect_inputs([directory], recursive=True)
-        self._append_anims(animations)
-
-    def _append_anims(self, paths: list[str]) -> None:
-        added = 0
-        for path in paths:
-            if path and path not in self.animation_paths:
-                self.animation_paths.append(path)
-                self.anims_list.insert("end", path)
-                added += 1
-        if added:
+            self._log(f"{added} arquivo(s) adicionado(s). Total: {len(self.paths)}.")
+        if ignored:
             self._log(
-                f"{added} animacao(oes) adicionada(s). Total: {len(self.animation_paths)}."
+                f"{ignored} arquivo(s) ignorado(s): extensao nao suportada.", "muted"
             )
 
-    def _clear_anims(self) -> None:
-        self.anims_list.delete(0, "end")
-        self.animation_paths.clear()
+    def _add_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Escolher arquivos",
+            filetypes=[
+                ("Todos os suportados", "*.p3m *.frm *.glb *.gltf"),
+                ("Modelos Grand Chase", "*.p3m"),
+                ("Animacoes Grand Chase", "*.frm"),
+                ("glTF binario", "*.glb"),
+                ("glTF texto", "*.gltf"),
+                ("Todos os arquivos", "*.*"),
+            ],
+        )
+        self._add_paths(list(paths))
+
+    def _add_folder(self) -> None:
+        directory = filedialog.askdirectory(title="Escolher pasta")
+        if not directory:
+            return
+        models, animations, gltfs = collect_inputs([directory], recursive=True)
+        self._add_paths(models + animations + gltfs)
+
+    def _remove_selected(self) -> None:
+        for index in reversed(self.file_list.curselection()):
+            del self.paths[index]
+        self._refresh_list()
+
+    def _clear(self) -> None:
+        self.paths.clear()
+        self._refresh_list()
+
+    # --------------------------------------------------------------- saida
 
     def _choose_output(self) -> None:
         directory = filedialog.askdirectory(title="Escolher pasta de saida")
@@ -268,16 +510,15 @@ class ConverterApp(ttk.Frame):
         try:
             if sys.platform == "win32":
                 os.startfile(directory)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                import subprocess
-
-                subprocess.Popen(["open", directory])
             else:
                 import subprocess
 
-                subprocess.Popen(["xdg-open", directory])
+                opener = "open" if sys.platform == "darwin" else "xdg-open"
+                subprocess.Popen([opener, directory])
         except OSError as error:
-            messagebox.showerror(APP_TITLE, f"Nao foi possivel abrir a pasta:\n{error}")
+            messagebox.showerror(
+                APP_TITLE, f"Nao foi possivel abrir a pasta:\n{error}"
+            )
 
     # ------------------------------------------------------------------- log
 
@@ -289,11 +530,28 @@ class ConverterApp(ttk.Frame):
 
     # ------------------------------------------------------------- conversao
 
-    def _start_conversion(self) -> None:
+    def _start(self) -> None:
         if self._worker and self._worker.is_alive():
             return
-        if not self.model_paths:
-            messagebox.showwarning(APP_TITLE, "Adicione pelo menos um modelo .p3m.")
+
+        direction = self._direction()
+        if direction is None:
+            messagebox.showwarning(
+                APP_TITLE, "Adicione arquivos .p3m, .frm, .glb ou .gltf."
+            )
+            return
+
+        models = [p for p in self.paths if classify_path(p) == "p3m"]
+        animations = [p for p in self.paths if classify_path(p) == "frm"]
+        gltfs = [p for p in self.paths if classify_path(p) == "gltf"]
+
+        if direction == Direction.TO_GLTF and not models:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Ha animacoes .frm na lista, mas nenhum modelo .p3m.\n\n"
+                "Uma animacao sozinha nao tem esqueleto para ser aplicada: "
+                "adicione o .p3m correspondente.",
+            )
             return
 
         output_dir = self.output_dir.get().strip()
@@ -303,14 +561,16 @@ class ConverterApp(ttk.Frame):
         try:
             os.makedirs(output_dir, exist_ok=True)
         except OSError as error:
-            messagebox.showerror(APP_TITLE, f"Nao foi possivel criar a pasta:\n{error}")
+            messagebox.showerror(
+                APP_TITLE, f"Nao foi possivel criar a pasta:\n{error}"
+            )
             return
 
         options = ConvertOptions(
-            embed_texture=self.embed_texture.get(),
-            double_sided=self.double_sided.get(),
+            embed_texture=self.with_texture.get(),
+            extract_texture=self.with_texture.get(),
             texture_dirs=sorted(
-                {os.path.dirname(os.path.abspath(p)) for p in self.model_paths}
+                {os.path.dirname(os.path.abspath(p)) for p in self.paths}
             ),
         )
 
@@ -319,11 +579,13 @@ class ConverterApp(ttk.Frame):
         self.cancel_button.configure(state="normal")
         self.progress_value.set(0.0)
         self._log("")
-        self._log(f"Convertendo {len(self.model_paths)} modelo(s) para {output_dir}")
+        self._log(
+            f"{Direction.LABELS[direction]}  ->  {output_dir}", "muted"
+        )
 
         self._worker = threading.Thread(
-            target=self._run_conversion,
-            args=(list(self.model_paths), list(self.animation_paths), output_dir, options),
+            target=self._run,
+            args=(direction, models, animations, gltfs, output_dir, options),
             daemon=True,
         )
         self._worker.start()
@@ -332,76 +594,102 @@ class ConverterApp(ttk.Frame):
         self._cancel.set()
         self.status.set("Cancelando...")
 
-    def _run_conversion(
+    def _run(
         self,
+        direction: str,
         models: list[str],
         animations: list[str],
+        gltfs: list[str],
         output_dir: str,
         options: ConvertOptions,
     ) -> None:
         """Roda na thread de trabalho. Comunica-se apenas pela fila."""
-        auto = self.auto_animations.get()
-        # Agrupa as animacoes escolhidas pelo numero de ossos, uma vez, para nao
-        # reabrir os mesmos FRM para cada modelo.
+        if direction == Direction.TO_GC:
+            items = gltfs
+        else:
+            items = models
+
+        total = len(items)
+        succeeded = 0
+
+        # Agrupa as animacoes por numero de ossos uma unica vez, para nao
+        # reabrir os mesmos FRM a cada modelo.
         by_bone_count: dict[int, list[str]] = {}
-        if animations and auto:
+        if direction == Direction.TO_GLTF and animations:
             from gc3d.formats import frm as frm_format
 
             for path in animations:
                 try:
                     count = frm_format.load_frm(path).num_bones
                 except Exception:  # noqa: BLE001 - arquivo ruim so e ignorado
-                    continue
-                by_bone_count.setdefault(count, []).append(path)
-
-        total = len(models)
-        succeeded = 0
-        for index, model_path in enumerate(models):
-            if self._cancel.is_set():
-                self._queue.put(("status", "Cancelado pelo usuario."))
-                break
-
-            self._queue.put(("progress", (index / total) * 100.0))
-            self._queue.put(("status", f"[{index + 1}/{total}] {os.path.basename(model_path)}"))
-
-            chosen = animations
-            if animations and auto:
-                try:
-                    from gc3d.formats import p3m as p3m_format
-
-                    bones = p3m_format.load_p3m(model_path).num_angle_bones
-                    chosen = by_bone_count.get(bones, [])
-                except Exception:  # noqa: BLE001
-                    chosen = []
-            elif not animations:
-                chosen = []
-
-            stem = os.path.splitext(os.path.basename(model_path))[0]
-            output_path = os.path.join(output_dir, stem + ".glb")
-            result = convert_model(model_path, output_path, chosen, options)
-
-            if result.ok:
-                succeeded += 1
-                message = (
-                    f"[ok] {os.path.basename(model_path)} -> {stem}.glb  "
-                    f"({result.summary})"
-                )
-                self._queue.put(("log", (message, "ok")))
-                if result.texture_used:
                     self._queue.put(
                         (
                             "log",
                             (
-                                f"     textura: {os.path.basename(result.texture_used)}",
-                                None,
+                                f"     ignorando {os.path.basename(path)}: "
+                                f"nao foi possivel ler",
+                                "aviso",
                             ),
                         )
                     )
+                    continue
+                by_bone_count.setdefault(count, []).append(path)
+
+        for index, path in enumerate(items):
+            if self._cancel.is_set():
+                self._queue.put(("status", "Cancelado."))
+                break
+
+            self._queue.put(("progress", (index / total) * 100.0))
+            self._queue.put(
+                ("status", f"[{index + 1}/{total}] {os.path.basename(path)}")
+            )
+
+            if direction == Direction.TO_GC:
+                result = convert_to_gc(path, output_dir, options)
+            else:
+                chosen: list[str] = []
+                if animations:
+                    try:
+                        from gc3d.formats import p3m as p3m_format
+
+                        bones = p3m_format.load_p3m(path).num_angle_bones
+                        chosen = by_bone_count.get(bones, [])
+                    except Exception:  # noqa: BLE001
+                        chosen = []
+                stem = os.path.splitext(os.path.basename(path))[0]
+                result = convert_model(
+                    path, os.path.join(output_dir, stem + ".glb"), chosen, options
+                )
+
+            if result.ok:
+                succeeded += 1
+                produced = ", ".join(
+                    os.path.basename(p) for p in result.outputs[:3]
+                )
+                if len(result.outputs) > 3:
+                    produced += f" (+{len(result.outputs) - 3})"
+                self._queue.put(
+                    (
+                        "log",
+                        (
+                            f"[ok] {os.path.basename(path)} -> {produced}",
+                            "ok",
+                        ),
+                    )
+                )
+                self._queue.put(("log", (f"     {result.summary}", "muted")))
                 for warning in result.warnings:
                     self._queue.put(("log", (f"     aviso: {warning}", "aviso")))
             else:
                 self._queue.put(
-                    ("log", (f"[ERRO] {os.path.basename(model_path)}: {result.error}", "erro"))
+                    (
+                        "log",
+                        (
+                            f"[ERRO] {os.path.basename(path)}: {result.error}",
+                            "erro",
+                        ),
+                    )
                 )
 
         self._queue.put(("progress", 100.0))
@@ -421,23 +709,23 @@ class ConverterApp(ttk.Frame):
                     self.progress_value.set(payload)
                 elif kind == "done":
                     succeeded, total = payload
-                    self.status.set(f"Concluido: {succeeded}/{total} convertido(s).")
-                    self._log(f"Concluido: {succeeded}/{total} convertido(s).", "ok")
+                    self.status.set(f"Concluido: {succeeded}/{total}.")
+                    self._log(
+                        f"Concluido: {succeeded}/{total} convertido(s).", "ok"
+                    )
                     self.convert_button.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
+                    # A lista e limpa ao terminar: o proximo trabalho comeca
+                    # limpo, sem risco de reconverter por engano.
+                    self._clear()
         except queue.Empty:
             pass
-        self.after(100, self._drain_queue)
+        self.after(80, self._drain_queue)
 
 
 def main() -> int:
     root = tk.Tk()
-    # O tema "clam" existe em todas as plataformas e evita o visual datado do
-    # tema padrao do tkinter no Linux.
-    try:
-        ttk.Style().theme_use("clam")
-    except tk.TclError:
-        pass
+    apply_dark_theme(root)
     ConverterApp(root)
     root.mainloop()
     return 0

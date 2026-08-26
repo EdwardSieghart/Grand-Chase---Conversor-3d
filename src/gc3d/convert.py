@@ -1,13 +1,14 @@
-"""Pipeline de conversao de alto nivel.
+"""Pipeline de conversao de alto nivel, nas duas direcoes.
 
-Este e o modulo que a CLI e a GUI usam. Ele amarra as pecas:
+    P3M + FRM  ──▶  Scene  ──▶  GLB          (extrair do jogo)
+    GLB/glTF   ──▶  Scene  ──▶  P3M + FRM    (devolver para o jogo)
 
-    P3M -> Scene ---+
-                    |--> merge --> to_right_handed --> GLB
-    FRM -> Scene ---+
+A direcao e deduzida da extensao dos arquivos de entrada, e nao pedida ao
+usuario: se entram `.p3m`/`.frm`, o destino so pode ser glTF; se entra
+`.glb`/`.gltf`, o destino so pode ser P3M/FRM.
 
-Tudo aqui e sincrono e sem estado global, para que a GUI possa chamar as mesmas
-funcoes de uma thread de trabalho sem surpresas.
+Tudo aqui e sincrono e sem estado global, para que a interface grafica possa
+chamar as mesmas funcoes de uma thread de trabalho sem surpresas.
 """
 
 from __future__ import annotations
@@ -17,26 +18,55 @@ import traceback
 from dataclasses import dataclass, field
 
 from .formats import frm as frm_format
+from .formats import gltf_in
 from .formats import p3m as p3m_format
 from .formats.glb import GlbOptions, export_glb
-from .scene import Scene
+from .scene import DEFAULT_FPS, Scene
 from .textures import DdsError, find_texture_file, load_texture_as_png
 
 __all__ = [
     "ConvertOptions",
     "ConvertResult",
+    "Direction",
+    "GC_EXTENSIONS",
+    "GLTF_EXTENSIONS",
+    "classify_path",
+    "detect_direction",
     "build_scene",
     "convert_model",
+    "convert_to_gc",
     "convert_batch",
     "find_animations_for_model",
     "collect_inputs",
 ]
+
+#: Extensoes dos formatos do jogo (entrada da conversao direta).
+GC_EXTENSIONS = (".p3m", ".frm")
+#: Extensoes de glTF (entrada da conversao inversa).
+GLTF_EXTENSIONS = (".glb", ".gltf")
+
+
+class Direction:
+    """Sentido da conversao."""
+
+    TO_GLTF = "para_glb"
+    TO_GC = "para_p3m_frm"
+
+    LABELS = {
+        TO_GLTF: "P3M/FRM -> GLB",
+        TO_GC: "GLB -> P3M/FRM",
+    }
 
 
 @dataclass
 class ConvertOptions:
     """Ajustes da conversao. Os defaults servem para o caso comum."""
 
+    # ---- comuns
+    #: Normaliza normais nao unitarias (varios P3M oficiais precisam disso).
+    normalize_normals: bool = True
+
+    # ---- P3M/FRM -> GLB
     #: Procura e embute a textura do modelo no GLB.
     embed_texture: bool = True
     #: Caminho explicito de textura. Tem prioridade sobre a busca automatica.
@@ -47,10 +77,16 @@ class ConvertOptions:
     double_sided: bool = True
     #: "OPAQUE" | "MASK" | "BLEND"; None decide pela presenca de alfa.
     alpha_mode: str | None = None
-    #: Normaliza normais nao unitarias (varios P3M oficiais precisam disso).
-    normalize_normals: bool = True
     #: Grava o JSON do GLB indentado. Util para depurar, gera arquivo maior.
     pretty_json: bool = False
+
+    # ---- GLB -> P3M/FRM
+    #: Grava tambem as animacoes do glTF como arquivos .frm.
+    export_animations: bool = True
+    #: Extrai a textura embutida do glTF como .png ao lado do .p3m.
+    extract_texture: bool = True
+    #: Prefixo dos arquivos .frm gerados.
+    animation_prefix: str = ""
 
 
 @dataclass
@@ -58,7 +94,9 @@ class ConvertResult:
     """Resultado de uma conversao, para relatorio na CLI ou na GUI."""
 
     source: str
-    output_path: str | None = None
+    direction: str = Direction.TO_GLTF
+    #: Todos os arquivos gravados (um GLB, ou um P3M mais N FRM).
+    outputs: list[str] = field(default_factory=list)
     ok: bool = False
     bytes_written: int = 0
     summary: str = ""
@@ -67,6 +105,42 @@ class ConvertResult:
     error: str | None = None
     #: Traceback completo, guardado apenas para o modo verboso.
     traceback: str | None = None
+
+    @property
+    def output_path(self) -> str | None:
+        """Primeiro arquivo gravado, para mensagens curtas."""
+        return self.outputs[0] if self.outputs else None
+
+
+# ---------------------------------------------------------- deteccao de direcao
+
+
+def classify_path(path: str) -> str | None:
+    """Devolve `"p3m"`, `"frm"`, `"gltf"` ou None, conforme a extensao."""
+    extension = os.path.splitext(path)[1].lower()
+    if extension == ".p3m":
+        return "p3m"
+    if extension == ".frm":
+        return "frm"
+    if extension in GLTF_EXTENSIONS:
+        return "gltf"
+    return None
+
+
+def detect_direction(paths: list[str] | tuple[str, ...]) -> str | None:
+    """Deduz o sentido da conversao a partir das extensoes.
+
+    Devolve None quando nao ha nada reconhecivel. Se houver mistura de glTF com
+    arquivos do jogo, o glTF ganha e os demais serao reportados como ignorados
+    por quem chamou — misturar os dois num unico trabalho nao tem significado.
+    """
+    kinds = {classify_path(path) for path in paths}
+    kinds.discard(None)
+    if not kinds:
+        return None
+    if "gltf" in kinds:
+        return Direction.TO_GC
+    return Direction.TO_GLTF
 
 
 # ------------------------------------------------------------ montagem da cena
@@ -152,7 +226,7 @@ def _resolve_texture(
         return None, None
 
 
-# ------------------------------------------------------------------- conversao
+# --------------------------------------------------- P3M/FRM -> GLB (direta)
 
 
 def convert_model(
@@ -164,7 +238,7 @@ def convert_model(
     """Converte um P3M (e FRMs opcionais) em um arquivo GLB."""
     options = options or ConvertOptions()
     source = model_path or (animation_paths[0] if animation_paths else "<vazio>")
-    result = ConvertResult(source=source)
+    result = ConvertResult(source=source, direction=Direction.TO_GLTF)
 
     try:
         scene = build_scene(model_path, animation_paths, result.warnings)
@@ -199,22 +273,147 @@ def convert_model(
             ),
         )
 
-        parent = os.path.dirname(os.path.abspath(output_path))
-        os.makedirs(parent, exist_ok=True)
-        with open(output_path, "wb") as handle:
-            handle.write(data)
+        _write_file(output_path, data)
 
         result.ok = True
-        result.output_path = output_path
+        result.outputs = [output_path]
         result.bytes_written = len(data)
         result.summary = scene.summary()
         result.texture_used = texture_path
     except Exception as error:  # noqa: BLE001 - a CLI/GUI relata por arquivo
-        result.ok = False
-        result.error = f"{type(error).__name__}: {error}"
-        result.traceback = traceback.format_exc()
+        _record_failure(result, error)
 
     return result
+
+
+# ---------------------------------------------------- GLB -> P3M/FRM (inversa)
+
+
+def convert_to_gc(
+    gltf_path: str,
+    output_dir: str,
+    options: ConvertOptions | None = None,
+) -> ConvertResult:
+    """Converte um `.glb`/`.gltf` em um `.p3m` e, opcionalmente, varios `.frm`.
+
+    Gera:
+
+        <nome>.p3m                    a malha e o esqueleto
+        <nome>_<animacao>.frm         uma por animacao do glTF
+        <nome>.png                    a textura base color, se estiver embutida
+    """
+    options = options or ConvertOptions()
+    result = ConvertResult(source=gltf_path, direction=Direction.TO_GC)
+
+    try:
+        stem = os.path.splitext(os.path.basename(gltf_path))[0]
+        document = gltf_in.load_gltf(gltf_path)
+        scene = gltf_in.gltf_to_scene(
+            document, stem, DEFAULT_FPS, result.warnings
+        )
+
+        if not scene.meshes:
+            raise ValueError(
+                "o glTF nao tem nenhuma malha triangulada para converter"
+            )
+
+        if options.normalize_normals:
+            fixed = scene.normalize_normals()
+            if fixed:
+                result.warnings.append(
+                    f"{fixed} normal(is) nao unitaria(s) normalizada(s)"
+                )
+
+        # Um P3M sempre declara pelo menos um par de ossos, mesmo quando a malha
+        # e estatica: os arquivos oficiais desse tipo tem 1 PositionBone,
+        # 1 AngleBone e o sentinela 0xFF no indice de osso de todo vertice.
+        # Reproduzimos essa forma, deixando os vertices sem joint para que o
+        # escritor grave 0xFF. Atribuir os vertices ao osso raiz mudaria o
+        # arquivo sem necessidade.
+        if not scene.skeleton:
+            from .scene import Joint
+
+            scene.skeleton = [Joint(name="bone_0")]
+
+        scene.to_left_handed()
+
+        texture_name = ""
+        texture_png = None
+        if options.extract_texture:
+            texture_png = gltf_in.extract_base_color_png(document)
+            if texture_png:
+                texture_name = stem + ".png"
+
+        p3m = p3m_format.scene_to_p3m(scene, texture_name)
+        p3m_path = os.path.join(output_dir, stem + ".p3m")
+        written = p3m_format.save_p3m(p3m, _ensure_dir(p3m_path))
+        result.outputs.append(p3m_path)
+        result.bytes_written += written
+
+        if texture_png:
+            texture_path = os.path.join(output_dir, texture_name)
+            _write_file(texture_path, texture_png)
+            result.outputs.append(texture_path)
+            result.bytes_written += len(texture_png)
+            result.texture_used = texture_path
+
+        if options.export_animations:
+            num_bones = len(scene.skeleton)
+            for animation in scene.animations:
+                safe = _safe_name(animation.name) or "anim"
+                filename = f"{options.animation_prefix}{stem}_{safe}.frm"
+                frm_path = os.path.join(output_dir, filename)
+                try:
+                    frm = frm_format.animation_to_frm(animation, num_bones)
+                except frm_format.InvalidFrmError as error:
+                    result.warnings.append(
+                        f"animacao {animation.name!r} nao gravada: {error}"
+                    )
+                    continue
+                written = frm_format.save_frm(frm, _ensure_dir(frm_path))
+                result.outputs.append(frm_path)
+                result.bytes_written += written
+        elif scene.animations:
+            result.warnings.append(
+                f"{len(scene.animations)} animacao(oes) presentes no glTF nao "
+                f"foram gravadas (exportacao de animacoes desligada)"
+            )
+
+        result.ok = True
+        result.summary = scene.summary()
+    except Exception as error:  # noqa: BLE001
+        _record_failure(result, error)
+
+    return result
+
+
+def _safe_name(name: str) -> str:
+    """Reduz um nome de animacao a algo seguro para nome de arquivo."""
+    keep = []
+    for char in name.strip():
+        if char.isalnum() or char in "-_":
+            keep.append(char)
+        elif char in " .":
+            keep.append("_")
+    return "".join(keep)[:60].strip("_")
+
+
+def _ensure_dir(path: str) -> str:
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    return path
+
+
+def _write_file(path: str, data: bytes) -> None:
+    _ensure_dir(path)
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+
+def _record_failure(result: ConvertResult, error: Exception) -> None:
+    result.ok = False
+    result.error = f"{type(error).__name__}: {error}"
+    result.traceback = traceback.format_exc()
 
 
 # --------------------------------------------------------------- lote e busca
@@ -223,9 +422,9 @@ def convert_model(
 def find_animations_for_model(model_path: str, animation_dir: str) -> list[str]:
     """Lista os FRM de uma pasta que parecem pertencer a um modelo.
 
-    O jogo nao guarda essa ligacao em nenhum lugar, entao usamos duas pistas:
-    o prefixo do nome do arquivo e a quantidade de ossos. A segunda e a
-    confiavel: um FRM so pode animar um modelo com o mesmo numero de ossos.
+    O jogo nao guarda essa ligacao em nenhum lugar, entao usamos o unico
+    critario confiavel: um FRM so pode animar um modelo com o mesmo numero de
+    ossos.
     """
     if not os.path.isdir(animation_dir):
         return []
@@ -250,17 +449,22 @@ def find_animations_for_model(model_path: str, animation_dir: str) -> list[str]:
     return matches
 
 
-def collect_inputs(paths: list[str], recursive: bool = True) -> tuple[list[str], list[str]]:
-    """Expande arquivos e pastas em duas listas: `(p3m, frm)`."""
+def collect_inputs(
+    paths: list[str], recursive: bool = True
+) -> tuple[list[str], list[str], list[str]]:
+    """Expande arquivos e pastas em `(modelos_p3m, animacoes_frm, gltf)`."""
     models: list[str] = []
     animations: list[str] = []
+    gltfs: list[str] = []
 
     def classify(path: str) -> None:
-        lower = path.lower()
-        if lower.endswith(".p3m"):
+        kind = classify_path(path)
+        if kind == "p3m":
             models.append(path)
-        elif lower.endswith(".frm"):
+        elif kind == "frm":
             animations.append(path)
+        elif kind == "gltf":
+            gltfs.append(path)
 
     for entry in paths:
         if os.path.isfile(entry):
@@ -276,7 +480,7 @@ def collect_inputs(paths: list[str], recursive: bool = True) -> tuple[list[str],
                     if os.path.isfile(full):
                         classify(full)
 
-    return sorted(models), sorted(animations)
+    return sorted(models), sorted(animations), sorted(gltfs)
 
 
 def convert_batch(
@@ -286,10 +490,10 @@ def convert_batch(
     animation_dir: str | None = None,
     progress=None,
 ) -> list[ConvertResult]:
-    """Converte varios modelos para uma pasta de saida.
+    """Converte varios P3M para GLB, numa pasta de saida.
 
     `progress` e um callable opcional `(indice, total, caminho)` chamado antes de
-    cada arquivo, para a GUI atualizar a barra de progresso.
+    cada arquivo, para a interface atualizar a barra de progresso.
     """
     options = options or ConvertOptions()
     results: list[ConvertResult] = []

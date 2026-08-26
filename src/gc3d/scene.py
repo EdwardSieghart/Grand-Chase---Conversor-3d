@@ -216,8 +216,8 @@ class Scene:
                     fixed += 1
         return fixed
 
-    def to_right_handed(self) -> Scene:
-        """Converte a cena de left-handed (Grand Chase) para right-handed (glTF).
+    def _flip_z(self) -> None:
+        """Espelha o eixo Z de toda a cena, trocando a mao do sistema.
 
         Sao quatro operacoes, e todas as quatro sao necessarias:
 
@@ -230,11 +230,9 @@ class Scene:
            `M' = S * M * S`. Negar apenas a translacao seria insuficiente: a
            parte rotacional tambem muda de mao.
 
-        Idempotente por seguranca: chamar duas vezes nao corrompe a cena.
+        A operacao e a sua propria inversa, e por isso serve tanto para
+        left-handed -> right-handed quanto para o contrario.
         """
-        if self.right_handed:
-            return self
-
         for mesh in self.meshes:
             for vertex in mesh.vertices:
                 vertex.position = vec3_flip_z(vertex.position)
@@ -253,7 +251,27 @@ class Scene:
                     mat4_flip_z_conjugate(m) for m in frame.transforms
                 ]
 
+    def to_right_handed(self) -> Scene:
+        """Converte de left-handed (Grand Chase) para right-handed (glTF).
+
+        Idempotente: chamar duas vezes nao corrompe a cena.
+        """
+        if self.right_handed:
+            return self
+        self._flip_z()
         self.right_handed = True
+        return self
+
+    def to_left_handed(self) -> Scene:
+        """Converte de right-handed (glTF) para left-handed (Grand Chase).
+
+        E o caminho usado na conversao inversa, ao gravar P3M e FRM a partir de
+        um glTF. Idempotente.
+        """
+        if not self.right_handed:
+            return self
+        self._flip_z()
+        self.right_handed = False
         return self
 
     # -------------------------------------------------------------- relatorio

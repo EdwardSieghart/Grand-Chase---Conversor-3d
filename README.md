@@ -1,35 +1,40 @@
 # Grand Chase 3D Importer
 
-Conversor de modelos e animações do **Grand Chase Classic** para **glTF 2.0
-binário (.glb)**, com interface gráfica e linha de comando, rodando igual no
-**Linux** e no **Windows**.
+Conversor de modelos e animações do **Grand Chase Classic**, nos **dois
+sentidos**, com interface gráfica e linha de comando, rodando igual no **Linux**
+e no **Windows**.
 
-Lê os formatos proprietários do jogo:
+```
+P3M + FRM  ──▶  GLB          extrair do jogo para editar no Blender
+GLB / glTF ──▶  P3M + FRM    devolver o modelo editado para o jogo
+```
 
-| Formato | O que contém | Situação |
-|---------|--------------|----------|
-| `.p3m` | Malha, esqueleto, skinning e UVs | v0.5 lida e validada contra 131 arquivos reais |
-| `.frm` | Animação por keyframes (55 FPS) | v1.1 validada contra 68 arquivos reais; v1.0 implementada |
-| `.dds` | Textura | DXT1, DXT3, DXT5 e superfícies de 16/24/32 bits |
+O sentido é **detectado sozinho** pelas extensões dos arquivos carregados. Não há
+botão para escolher: dado o que entrou, só existe um destino possível.
 
-E grava um único `.glb` autocontido — geometria, esqueleto, todas as animações e
-a textura embutida — que abre direto no **Blender, Unity, Godot, Three.js** e no
-visualizador 3D do Windows, sem plugin nenhum.
+| Formato | Conteúdo | Situação |
+|---------|----------|----------|
+| `.p3m` | Malha, esqueleto, skinning e UVs | v0.5 — **lê e escreve** |
+| `.frm` | Animação por keyframes (55 FPS) | v1.1 — **lê e escreve**; v1.0 lê |
+| `.glb` / `.gltf` | glTF 2.0 | **lê e escreve** |
+| `.dds` | Textura | DXT1, DXT3, DXT5 e 16/24/32 bits (leitura) |
 
 ---
 
 ## Por que este projeto existe
 
-O conversor antigo (`chaseconv`, escrito em Rust) funcionava, mas só tinha
-executável para Windows e exigia a toolchain do Rust para recompilar. Este
-projeto reimplementa a conversão em **Python 3 sem nenhuma dependência externa**,
-o que traz três coisas concretas:
+O conversor antigo (`chaseconv`, em Rust) só tinha executável para Windows,
+exigia a toolchain do Rust para recompilar, e o importador de glTF vinha com um
+aviso no próprio código: *"GLTF importing does not work properly yet"*.
+
+Este projeto reimplementa tudo em **Python 3 sem nenhuma dependência externa**, o
+que traz vantagens concretas:
 
 - roda em Linux e Windows a partir do mesmo código, sem recompilar;
-- pode ser executado direto pelo Python, sem instalar nada, ou empacotado como
-  executável único;
-- ganha textura embutida, seleção automática de animações compatíveis e
-  conversão em lote, que o conversor antigo não tinha.
+- funciona direto pelo Python, sem instalar nada, ou empacotado como executável;
+- a **volta funciona**: 131 de 131 modelos e 70 de 70 animações sobrevivem ao
+  ciclo completo sem perda mensurável;
+- ganha textura embutida, casamento automático de animações e conversão em lote.
 
 ---
 
@@ -47,26 +52,31 @@ python3 gc3d_gui.py          # interface gráfica
 python3 gc3d_cli.py --help   # linha de comando
 ```
 
-No Windows, use `python` em vez de `python3`. Ao instalar o Python, deixe
-marcado **"tcl/tk and IDLE"** (vem marcado por padrão) — é o que fornece a
-interface gráfica.
+No Windows, use `python` em vez de `python3`. Ao instalar o Python, deixe marcado
+**"tcl/tk and IDLE"** (vem marcado por padrão) — é o que fornece a interface.
 
 ### Executáveis prontos
 
-```bash
-# Linux
-./build/build_linux.sh
+Cada plataforma tem sua pasta, e a saída não se mistura:
 
-# Windows
-build\build_windows.bat
+```bash
+# Linux  ->  dist/linux/
+./build/linux/build.sh
+
+# Windows, rodando no Windows  ->  dist\windows\
+build\windows\build.bat
+
+# Windows, a partir do Linux, usando Wine  ->  dist/windows/
+./build/windows/build_wine.sh
 ```
 
-Gera `dist/gc3d` (linha de comando) e `dist/gc3d-gui` (interface gráfica), com
-`.exe` no Windows. Precisa do PyInstaller (`pip install pyinstaller`) apenas
-para gerar; os binários resultantes não dependem de nada instalado.
+Precisa do PyInstaller (`pip install pyinstaller`) apenas para gerar; os binários
+resultantes não dependem de nada instalado.
 
-O PyInstaller não faz cross-compile: para gerar o `.exe` do Windows é preciso
-rodar o script em uma máquina Windows.
+O PyInstaller não faz cross-compile — ele empacota o interpretador da plataforma
+onde roda. O script `build_wine.sh` resolve isso rodando o PyInstaller **dentro
+do Wine**, sobre um Python para Windows que ele baixa e instala num prefixo
+próprio (`~/.gc3d-wine`, sem tocar no `~/.wine` do usuário).
 
 ---
 
@@ -75,64 +85,92 @@ rodar o script em uma máquina Windows.
 ### Interface gráfica
 
 ```bash
-python3 gc3d_gui.py
+python3 gc3d_gui.py       # ou ./dist/linux/gc3d-gui  /  dist\windows\gc3d-gui.exe
 ```
 
-1. **Adicionar arquivos** ou **Adicionar pasta** na lista de modelos.
-2. Opcionalmente, adicione a pasta de animações `.frm`. Com **"Casar
-   automaticamente por número de ossos"** marcado, cada modelo recebe só as
-   animações compatíveis com ele.
+Uma tela só, tema escuro:
+
+1. **Adicionar arquivos** ou **Adicionar pasta**. Tudo vai para a mesma lista —
+   modelos, animações e glTF juntos.
+2. A faixa azul no topo mostra o sentido detectado, por exemplo
+   `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes)`.
 3. Escolha a pasta de saída e clique em **Converter**.
 
-O registro mostra o que foi feito, com avisos por arquivo. A conversão roda em
-segundo plano, então a janela não congela, e pode ser cancelada.
+A lista é limpa ao terminar, então o próximo trabalho começa do zero sem risco de
+reconverter por engano. A conversão roda em segundo plano (a janela não congela) e
+pode ser cancelada entre arquivos.
+
+Quando o sentido é `P3M + FRM -> GLB`, cada modelo recebe apenas as animações
+compatíveis com ele — ver [associação de animações](#como-as-animações-são-associadas-aos-modelos).
 
 ### Linha de comando
 
 ```bash
-# um modelo
-python3 gc3d_cli.py convert abta003.p3m -o saida/
-
-# modelo com todas as animações compatíveis de uma pasta
+# extrair do jogo
 python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
 
-# animações específicas
-python3 gc3d_cli.py convert modelo.p3m -a andar.frm -a correr.frm -o saida/
+# devolver para o jogo (gera .p3m, .frm e .png)
+python3 gc3d_cli.py convert personagem.glb -o saida/
 
-# pasta inteira, casando animações automaticamente
-python3 gc3d_cli.py batch "GRAND CHASE/Models" --anim-dir "GRAND CHASE/ANIM" -o saida/
+# pastas inteiras, em qualquer sentido
+python3 gc3d_cli.py batch "GRAND CHASE/Models" --anim-dir animacoes/ -o saida/
+python3 gc3d_cli.py batch modelos_editados/ -o saida/
 
-# inspecionar sem converter
-python3 gc3d_cli.py info abta003.p3m 4528.frm
+# inspecionar sem converter (aceita os três formatos)
+python3 gc3d_cli.py info abta003.p3m 4528.frm personagem.glb
 ```
 
 Opções que costumam ser úteis:
 
 | Opção | Efeito |
 |-------|--------|
+| `--anim-dir PASTA` | inclui as animações compatíveis da pasta |
+| `-a ARQUIVO.frm` | inclui uma animação específica (pode repetir) |
 | `--texture-dir PASTA` | procura texturas também nesta pasta |
 | `--texture ARQUIVO` | usa uma textura específica |
-| `--no-texture` | não embute textura |
+| `--no-texture` | não embute nem extrai textura |
+| `--no-animations` | ao voltar para o jogo, não gera os `.frm` |
 | `--single-sided` | material de um lado só (padrão é dois lados) |
-| `--alpha-mode MASK` | força o modo de transparência |
 | `-v` | mostra todos os avisos |
 
-`gc3d_cli.py` devolve código de saída 0 em sucesso e diferente de 0 em falha,
-então dá para usar em script.
+Código de saída 0 em sucesso, diferente de 0 em falha — usável em script.
 
 ---
 
 ## Como as animações são associadas aos modelos
 
-O jogo não guarda em nenhum lugar qual `.frm` pertence a qual `.p3m`. O
-conversor usa o único critério confiável disponível: **um FRM só pode animar um
-modelo com o mesmo número de ossos**. É isso que `--anim-dir` e a opção de
-casamento automático da interface fazem.
+O jogo não guarda em nenhum lugar qual `.frm` pertence a qual `.p3m`. O conversor
+usa o único critério confiável disponível: **um FRM só pode animar um modelo com
+o mesmo número de ossos**. É uma restrição do próprio formato, não um palpite.
 
-Na prática funciona bem porque os personagens do Grand Chase usam poucos
-esqueletos distintos (15 e 23 ossos nos arquivos analisados). Se um modelo
-receber animações que não são dele, converta indicando os `.frm` um por um com
-`-a`.
+Funciona bem porque os personagens do Grand Chase usam poucos esqueletos
+distintos (15 e 23 ossos nos arquivos analisados). Se quiser controle total,
+indique os `.frm` um por um com `-a`.
+
+---
+
+## Voltando um modelo editado para o jogo
+
+Ao converter um `.glb`, você recebe:
+
+```
+personagem.p3m                 malha, esqueleto e skinning
+personagem_<animacao>.frm      uma por animação presente no glTF
+personagem.png                 a textura, se estava embutida
+```
+
+Três coisas que o formato do jogo impõe, e que o conversor avisa quando aplicam:
+
+- **Um osso por vértice.** O P3M v0.5 não tem skinning suave. Se um vértice tiver
+  vários ossos influentes, fica o de maior peso.
+- **Uma malha só.** Várias malhas ou primitivas são mescladas em uma.
+- **Limites do formato:** 255 ossos, 65535 vértices, 65535 triângulos.
+  Passar disso gera erro explicando o que reduzir.
+
+As animações são **reamostradas para 55 FPS**, a taxa do motor do jogo. Você pode
+animar no Blender no FPS que preferir. Ainda assim vale pôr a cena em 55 FPS
+(`Output Properties → Frame Rate → Custom`), porque o exportador do Blender
+quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 
 ---
 
@@ -141,27 +179,35 @@ receber animações que não são dele, converta indicando os `.frm` um por um c
 ```
 .
 ├── gc3d_cli.py            Linha de comando
-├── gc3d_gui.py            Interface gráfica (tkinter)
+├── gc3d_gui.py            Interface gráfica (tkinter, tema escuro)
 ├── src/gc3d/
 │   ├── binary.py          Leitura/escrita binária little-endian
-│   ├── mathutil.py        Vetores, matrizes 4x4, quaternions
-│   ├── scene.py           Representação intermediária (Scene, Mesh, Joint...)
+│   ├── mathutil.py        Vetores, matrizes 4x4, quaternions, slerp
+│   ├── scene.py           Representação intermediária
 │   ├── textures.py        DDS → RGBA → PNG, em Python puro
-│   ├── convert.py         Pipeline de conversão
+│   ├── convert.py         Pipeline nos dois sentidos
 │   └── formats/
-│       ├── p3m.py         Leitor de modelos
-│       ├── frm.py         Leitor de animações
-│       └── glb.py         Escritor glTF 2.0 binário
-├── tests/                 100 testes, só com a biblioteca padrão
+│       ├── p3m.py         Modelos: lê e escreve
+│       ├── frm.py         Animações: lê e escreve
+│       ├── glb.py         Escreve glTF 2.0 binário
+│       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
+├── tests/                 130 testes, só com a biblioteca padrão
 ├── tools/
-│   ├── glb_inspect.py     Inspeciona, valida e compara arquivos GLB
-│   └── blender_check.py   Validação end-to-end importando no Blender
+│   ├── glb_inspect.py     Inspeciona, valida e compara GLB
+│   ├── validate_all.py    Validação em massa da direção direta
+│   ├── roundtrip_check.py Validação de ida e volta
+│   ├── blender_check.py   Importa no Blender e confere o resultado
+│   ├── blender_reexport.py Reexporta pelo Blender (teste de interoperabilidade)
+│   └── publicar_github.sh Publica o repositório
 ├── samples/               Arquivos reais do jogo para teste
-├── build/                 Scripts de empacotamento
+├── build/
+│   ├── common/gc3d.spec   Receita compartilhada do PyInstaller
+│   ├── linux/build.sh     Build Linux      -> dist/linux/
+│   └── windows/           build.bat (no Windows) e build_wine.sh (do Linux)
 └── docs/
     ├── ESPECIFICACAO_FORMATOS.md   Layout byte a byte de P3M, FRM e BON
     ├── ARQUITETURA.md              Como o código está organizado e por quê
-    ├── GUIA_USO.md                 Manual detalhado e solução de problemas
+    ├── GUIA_USO.md                 Manual e solução de problemas
     ├── VALIDACAO.md                O que foi verificado e com que evidência
     └── CONTEXTO_PROJETO.md         Contexto para continuar o desenvolvimento
 ```
@@ -174,18 +220,17 @@ receber animações que não são dele, converta indicando os `.frm` um por um c
 python3 -m unittest discover -s tests -t .
 ```
 
-100 testes, sem dependências. Cobrem o leitor binário, a matemática de
-conversão de coordenadas, os parsers com dados sintéticos construídos byte a
-byte, o escritor GLB, o decodificador DDS, a CLI e uma bateria de integração
-sobre os arquivos reais em `samples/`.
-
-Validação extra, opcional, que confere se o resultado é aceito por um consumidor
-glTF real:
+130 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
-python3 tools/glb_inspect.py inspect saida/abta003.glb
+# direção direta: lê tudo e confere os GLB gerados
+python3 tools/validate_all.py --cross-check "/caminho/GRAND CHASE"
 
-ls -d "$PWD"/saida/*.glb > lista.txt
+# ida e volta: P3M/FRM -> GLB -> P3M/FRM, comparando com o original
+python3 tools/roundtrip_check.py --anim-dir "/caminho/ANIM" "/caminho/GRAND CHASE"
+
+# importação real no Blender
+ls -d "$PWD"/out/glb/*.glb > lista.txt
 blender --background --factory-startup \
     --python tools/blender_check.py -- --list lista.txt
 ```
@@ -197,13 +242,15 @@ blender --background --factory-startup \
 | Verificação | Resultado |
 |-------------|-----------|
 | Leitura de P3M | 131/131 arquivos |
-| Leitura de FRM | 68/68 arquivos, consumindo o arquivo byte a byte sem sobra |
-| Decodificação de DDS | 406/406 arquivos, **idênticos** ao decodificador do Pillow (erro máximo 0) |
-| Round-trip PNG | 406/406 exatos |
+| Leitura de FRM | 68/68, consumindo o arquivo byte a byte sem sobra |
+| Decodificação de DDS | 406/406 **idênticos** ao Pillow (erro máximo 0) |
 | GLB estruturalmente válido | 131/131 |
-| Importação no Blender | 132/132, zero vértices sem peso, todos com UV |
+| Importação no Blender | 131/131, zero vértices sem peso, todos com UV |
+| **Ida e volta** | **131/131 modelos e 70/70 animações idênticos** |
+| Interoperabilidade com o Blender | bind pose idêntico (desvio 0) após `GLB → Blender → GLB → P3M` |
 
-Detalhes e metodologia em [docs/VALIDACAO.md](docs/VALIDACAO.md).
+Detalhes, metodologia e os bugs que a validação encontrou em
+[docs/VALIDACAO.md](docs/VALIDACAO.md).
 
 ---
 
@@ -213,20 +260,19 @@ Detalhes e metodologia em [docs/VALIDACAO.md](docs/VALIDACAO.md).
   `docs/ESPECIFICACAO_FORMATOS.md` mas não implementadas. O programa detecta e
   recusa com mensagem clara, em vez de gerar geometria corrompida em silêncio.
 - **FRM v1.2 e v1.2_Origin** também são detectados e recusados.
-- **A conversão é só de entrada.** Não escreve `.p3m` nem `.frm` de volta.
+- **Escrita apenas em P3M v0.5 e FRM v1.1**, que é o que o Grand Chase Classic usa.
 - **Interpolação linear** nas animações. O jogo usa curvas Bézier com tangentes
-  desconhecidas; como os frames são densos (55 Hz), a diferença visual é
-  desprezível.
+  desconhecidas; a 55 Hz a diferença é desprezível.
 - **Um material por modelo.** O P3M v0.5 tem só um campo de textura.
+- **A textura volta como `.png`**, não como `.dds`. Converta com uma ferramenta
+  de imagem se o alvo exigir DDS.
 
 ---
 
 ## Versionamento
 
-O projeto é um repositório git. Para publicar no GitHub pela primeira vez:
-
 ```bash
-# com token pessoal (cria o repositório automaticamente)
+# primeira publicação
 read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 ./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer
 
@@ -234,19 +280,11 @@ read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 ./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --ssh
 ```
 
-Rode `./tools/publicar_github.sh` sem argumentos para ver as instruções
-completas, incluindo como gerar o token e a chave.
-
-Depois disso, salvar uma nova versão é o fluxo normal:
+Depois disso, o fluxo normal:
 
 ```bash
-git add -A
-git commit -m "descrição da mudança"
-git push
-
-# marcando uma versão
-git tag -a v1.1.0 -m "descrição"
-git push --tags
+git add -A && git commit -m "descrição" && git push
+git tag -a v1.2.0 -m "descrição" && git push --tags
 ```
 
 ---
@@ -263,5 +301,5 @@ git push --tags
 MIT. Ver [LICENSE](LICENSE).
 
 Este projeto lida com formatos de arquivo do Grand Chase, cujos direitos
-pertencem a KOG Studios. É uma ferramenta independente de interoperabilidade,
-sem nenhum conteúdo do jogo incluído além de pequenas amostras usadas para teste.
+pertencem a KOG Studios. É uma ferramenta independente de interoperabilidade, sem
+conteúdo do jogo incluído além de pequenas amostras usadas para teste.

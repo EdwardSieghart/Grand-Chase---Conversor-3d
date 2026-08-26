@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..binary import BinaryReader
+from ..binary import BinaryReader, BinaryWriter
 from ..mathutil import Mat4
 from ..scene import DEFAULT_FPS, Animation, Keyframe, Scene
 
@@ -39,6 +39,7 @@ __all__ = [
     "FRM_HEADER_V11",
     "FRM_HEADER_V12",
     "FRM_HEADER_V12_ORIGIN",
+    "DEFAULT_FPS",
     "Frame",
     "FrmFile",
     "InvalidFrmError",
@@ -47,6 +48,10 @@ __all__ = [
     "read_frm",
     "load_frm",
     "frm_to_scene",
+    "frm_to_animation",
+    "animation_to_frm",
+    "write_frm",
+    "save_frm",
 ]
 
 FRM_HEADER_V11 = b"Frm Ver 1.1\0"
@@ -249,3 +254,105 @@ def frm_to_scene(frm: FrmFile, name: str = "animation") -> Scene:
     scene = Scene()
     scene.animations.append(frm_to_animation(frm, name))
     return scene
+
+
+# ------------------------------------------------------------------- escrita
+
+
+def animation_to_frm(animation: Animation, num_bones: int | None = None) -> FrmFile:
+    """Converte uma `Animation` left-handed em um `FrmFile` v1.1.
+
+    A animacao **precisa** estar amostrada a 55 FPS. O importador de glTF cuida
+    disso ao reamostrar; se a animacao vier de outra fonte, garanta o mesmo.
+
+    Reverte a semantica do leitor: `plus_x` volta a ser o delta em relacao ao
+    frame anterior, `pos_y` e `pos_z` continuam absolutos.
+    """
+    if animation.fps != DEFAULT_FPS:
+        raise InvalidFrmError(
+            f"a animacao esta a {animation.fps} FPS e o FRM exige "
+            f"{DEFAULT_FPS}; reamostre antes de gravar"
+        )
+
+    if num_bones is None:
+        num_bones = max(
+            (len(frame.transforms) for frame in animation.frames), default=0
+        )
+    if num_bones == 0:
+        raise InvalidFrmError("a animacao nao tem nenhum osso")
+    if len(animation.frames) > 0xFFFF:
+        raise InvalidFrmError(
+            f"a animacao tem {len(animation.frames)} frames e o FRM v1.1 aceita "
+            f"no maximo {0xFFFF}"
+        )
+
+    frm = FrmFile(version="1.1", num_bones=num_bones)
+    previous_x = 0.0
+    identity: Mat4 = (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+    for keyframe in animation.frames:
+        x, y, z = keyframe.translation
+        bones = list(keyframe.transforms[:num_bones])
+        # Todo frame precisa ter exatamente num_bones matrizes.
+        while len(bones) < num_bones:
+            bones.append(identity)
+
+        frm.frames.append(
+            Frame(
+                option=0,
+                plus_x=x - previous_x,
+                pos_y=y,
+                pos_z=z,
+                bones=bones,
+            )
+        )
+        previous_x = x
+
+    return frm
+
+
+def write_frm(frm: FrmFile) -> bytes:
+    """Serializa um `FrmFile` nos bytes de um arquivo FRM."""
+    writer = BinaryWriter()
+
+    if frm.version == "1.1":
+        writer.bytes(FRM_HEADER_V11)
+        writer.u16(len(frm.frames))
+        writer.u16(frm.num_bones)
+    elif frm.version == "1.0":
+        if len(frm.frames) > 0xFF or frm.num_bones > 0xFF:
+            raise InvalidFrmError(
+                "os contadores da v1.0 sao de 1 byte; use a v1.1 para "
+                "animacoes maiores"
+            )
+        writer.u8(len(frm.frames))
+        writer.u8(frm.num_bones)
+    else:
+        raise UnsupportedFrmVersionError(frm.version)
+
+    for frame in frm.frames:
+        writer.u8(frame.option)
+        writer.f32(frame.plus_x)
+        writer.f32(frame.pos_y)
+        for matrix in frame.bones:
+            writer.f32s(matrix)
+
+    # Na v1.1 os valores de pos_z vao todos no fim, depois dos frames.
+    if frm.version == "1.1":
+        for frame in frm.frames:
+            writer.f32(frame.pos_z)
+
+    return writer.getvalue()
+
+
+def save_frm(frm: FrmFile, path) -> int:
+    """Grava um `FrmFile` em disco. Devolve o tamanho em bytes."""
+    data = write_frm(frm)
+    with open(path, "wb") as handle:
+        handle.write(data)
+    return len(data)

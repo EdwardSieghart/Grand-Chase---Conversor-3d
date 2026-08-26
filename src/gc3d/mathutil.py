@@ -36,13 +36,16 @@ __all__ = [
     "vec3_length",
     "vec3_normalize",
     "vec3_flip_z",
+    "vec3_lerp",
     "MAT4_IDENTITY",
     "mat4_multiply",
     "mat4_translation",
     "mat4_from_translation",
+    "mat4_from_trs",
     "mat4_flip_z_conjugate",
     "mat4_to_quaternion",
     "quat_normalize",
+    "quat_slerp",
     "FLIP_Z",
 ]
 
@@ -87,6 +90,15 @@ def vec3_normalize(a: Vec3) -> Vec3:
 def vec3_flip_z(a: Vec3) -> Vec3:
     """Converte entre sistemas de coordenadas left-handed e right-handed."""
     return (a[0], a[1], -a[2])
+
+
+def vec3_lerp(a: Vec3, b: Vec3, t: float) -> Vec3:
+    """Interpolacao linear entre dois vetores. Usada ao reamostrar animacoes."""
+    return (
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    )
 
 
 # -------------------------------------------------------------------- matrizes
@@ -138,6 +150,48 @@ def mat4_from_translation(t: Vec3) -> Mat4:
         0.0, 1.0, 0.0, 0.0,
         0.0, 0.0, 1.0, 0.0,
         t[0], t[1], t[2], 1.0,
+    )
+
+
+def mat4_from_trs(
+    translation: Vec3,
+    rotation: Quat,
+    scale: Vec3 = (1.0, 1.0, 1.0),
+) -> Mat4:
+    """Monta uma matriz column-major a partir de translacao, rotacao e escala.
+
+    E a operacao inversa de `mat4_to_quaternion` (mais a translacao), usada ao
+    importar glTF: o glTF guarda os nos e os canais de animacao como TRS
+    separados, e o FRM quer uma matriz 4x4 por osso.
+
+    A ordem aplicada e a do glTF: primeiro escala, depois rotacao, depois
+    translacao (`M = T * R * S`).
+    """
+    x, y, z, w = rotation
+    sx, sy, sz = scale
+
+    # Matriz de rotacao 3x3 a partir do quaternion.
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+
+    r00 = 1.0 - 2.0 * (yy + zz)
+    r01 = 2.0 * (xy - wz)
+    r02 = 2.0 * (xz + wy)
+    r10 = 2.0 * (xy + wz)
+    r11 = 1.0 - 2.0 * (xx + zz)
+    r12 = 2.0 * (yz - wx)
+    r20 = 2.0 * (xz - wy)
+    r21 = 2.0 * (yz + wx)
+    r22 = 1.0 - 2.0 * (xx + yy)
+
+    # Column-major: cada grupo de 4 e uma coluna. A escala multiplica a coluna
+    # correspondente ao seu eixo.
+    return (
+        r00 * sx, r10 * sx, r20 * sx, 0.0,
+        r01 * sy, r11 * sy, r21 * sy, 0.0,
+        r02 * sz, r12 * sz, r22 * sz, 0.0,
+        translation[0], translation[1], translation[2], 1.0,
     )
 
 
@@ -234,3 +288,50 @@ def quat_normalize(q: Quat) -> Quat:
         return (0.0, 0.0, 0.0, 1.0)
     inv = 1.0 / length
     return (q[0] * inv, q[1] * inv, q[2] * inv, q[3] * inv)
+
+
+def quat_slerp(a: Quat, b: Quat, t: float) -> Quat:
+    """Interpolacao esferica entre dois quaternions.
+
+    Necessaria ao reamostrar animacoes importadas de glTF: o Blender exporta
+    keyframes nos instantes que o animador criou, e o FRM exige uma pose a cada
+    1/55 s. Interpolar quaternion componente a componente encurta o arco e
+    produz variacao de velocidade visivel; slerp mantem velocidade angular
+    constante.
+
+    Segue a convencao do glTF de negar um dos quaternions quando o produto
+    interno e negativo, para percorrer o caminho mais curto.
+    """
+    dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+
+    if dot < 0.0:
+        b = (-b[0], -b[1], -b[2], -b[3])
+        dot = -dot
+
+    # Quase paralelos: slerp fica numericamente instavel, e lerp e equivalente.
+    if dot > 0.9995:
+        return quat_normalize(
+            (
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+                a[3] + (b[3] - a[3]) * t,
+            )
+        )
+
+    theta_0 = math.acos(max(-1.0, min(1.0, dot)))
+    theta = theta_0 * t
+    sin_theta = math.sin(theta)
+    sin_theta_0 = math.sin(theta_0)
+
+    s0 = math.cos(theta) - dot * sin_theta / sin_theta_0
+    s1 = sin_theta / sin_theta_0
+
+    return quat_normalize(
+        (
+            a[0] * s0 + b[0] * s1,
+            a[1] * s0 + b[1] * s1,
+            a[2] * s0 + b[2] * s1,
+            a[3] * s0 + b[3] * s1,
+        )
+    )

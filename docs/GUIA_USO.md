@@ -9,67 +9,73 @@ Para instalação rápida, ver o [README](../README.md).
 
 ## Entendendo os arquivos do jogo
 
-Antes de converter, ajuda saber o que é cada coisa.
-
 | Extensão | Conteúdo | Observação |
 |----------|----------|------------|
 | `.p3m` | Um modelo: malha, esqueleto, skinning, UVs | O arquivo principal |
 | `.frm` | Uma animação: uma pose por frame, a 55 FPS | Uma animação por arquivo |
 | `.dds` | Uma textura | Costuma ter o mesmo nome do `.p3m` |
 
-Um personagem completo é, portanto, **um** `.p3m` + **muitos** `.frm` + **uma**
-`.dds`. Por exemplo, o modelo `Lança Uno.p3m` tem 67 animações associadas.
+Um personagem completo é **um** `.p3m` + **muitos** `.frm` + **uma** `.dds`. O
+modelo `Lança Uno.p3m`, por exemplo, tem 67 animações associadas.
 
 O jogo **não guarda** em nenhum lugar qual animação pertence a qual modelo. O
 conversor descobre pelo número de ossos: um `.frm` só pode animar um `.p3m` com o
-mesmo número de ossos. É um critério do próprio formato, não um palpite.
+mesmo número de ossos. É uma restrição do próprio formato.
+
+---
+
+## Os dois sentidos
+
+O sentido é deduzido das extensões, não escolhido:
+
+```
+.p3m / .frm   ──▶  .glb                  para editar no Blender
+.glb / .gltf  ──▶  .p3m + .frm + .png    para voltar ao jogo
+```
+
+Misturar os dois numa mesma conversão não tem significado. Se houver mistura, o
+glTF ganha e o resto é reportado como ignorado.
 
 ---
 
 ## Interface gráfica
 
 ```bash
-python3 gc3d_gui.py       # rodando pelo código
-./dist/gc3d-gui           # executável no Linux
-dist\gc3d-gui.exe         # executável no Windows
+python3 gc3d_gui.py       # pelo código
+./dist/linux/gc3d-gui     # executável Linux
+dist\windows\gc3d-gui.exe # executável Windows
 ```
 
 ### Fluxo básico
 
-1. Em **Modelos**, clique em *Adicionar pasta* e escolha a pasta com os `.p3m`.
-   A busca é recursiva.
-2. Em **Animações**, clique em *Adicionar pasta* e escolha a pasta com os `.frm`.
-   Deixe **"Casar automaticamente por número de ossos"** marcado.
-3. Em **Pasta de saída**, escolha onde gravar.
-4. Clique em **Converter**.
+1. **Adicionar pasta** e escolha a pasta com os arquivos. A busca é recursiva, e
+   tudo vai para a mesma lista — modelos, animações e glTF juntos.
+2. Confira a faixa azul no topo: ela diz o sentido detectado e o que encontrou,
+   por exemplo `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes)`.
+3. Escolha a pasta de saída.
+4. **Converter**.
 
-O registro mostra uma linha por modelo, em verde quando dá certo, com os avisos
-indentados abaixo. A barra de progresso anda por arquivo. O botão **Cancelar**
-interrompe entre arquivos, então não deixa `.glb` incompleto no disco.
+A lista é limpa ao terminar. O registro mostra uma linha por arquivo, em verde
+quando dá certo, com os avisos indentados abaixo. **Cancelar** interrompe entre
+arquivos, então não deixa arquivo incompleto no disco.
 
-### As opções
+### A opção de textura
 
-**Embutir textura** — procura a textura e a grava dentro do `.glb`. A busca usa,
-nesta ordem: o nome declarado dentro do `.p3m` (quando utilizável), e o nome do
-próprio modelo (`abta003.p3m` → `abta003.dds`). Procura na pasta de cada modelo.
-Desmarque se você pretende aplicar texturas à mão.
+**Incluir textura** faz duas coisas diferentes conforme o sentido:
 
-**Faces dos dois lados** — deixa o material com `doubleSided`. Muitos modelos do
-Grand Chase são superfícies abertas (capas, cabelo, saias) que ficam com buracos
-se renderizadas de um lado só. Ligado por padrão.
-
-**Casar automaticamente por número de ossos** — quando desmarcado, *todas* as
-animações da lista são aplicadas a *todos* os modelos, o que gera resultado
-errado se os esqueletos forem diferentes. Só desmarque se você tem certeza de que
-tudo pertence ao mesmo personagem.
+- indo para `.glb`: procura a textura e a embute dentro do arquivo. A busca usa o
+  nome declarado dentro do `.p3m` (quando utilizável) e o nome do próprio modelo
+  (`abta003.p3m` → `abta003.dds`), na pasta de cada modelo.
+- voltando para `.p3m`: extrai a textura embutida no glTF como `.png` ao lado do
+  modelo.
 
 ---
 
 ## Linha de comando
 
-Três subcomandos: `info`, `convert` e `batch`.
-
 ### `info` — inspecionar sem converter
+
+Aceita os três formatos.
 
 ```bash
 python3 gc3d_cli.py info abta003.p3m
@@ -86,45 +92,42 @@ abta003.p3m
   nome de textura    (vazio)
 ```
 
-O número em **angle bones** é o que precisa bater com o dos `.frm`. Use para
-descobrir quais animações servem para um modelo:
+O número em **angle bones** é o que precisa bater com o dos `.frm`. Para descobrir
+quais animações servem para um modelo:
 
 ```bash
 python3 gc3d_cli.py info animacoes/*.frm | grep -B3 "ossos              15"
 ```
 
-### `convert` — um modelo
+Num glTF, `info` mostra o gerador, contagens e a lista de animações — útil para
+conferir o que o Blender realmente exportou antes de converter.
+
+### `convert` — um arquivo
 
 ```bash
-# só o modelo
+# extrair do jogo
 python3 gc3d_cli.py convert abta003.p3m -o saida/
-
-# com todas as animações compatíveis de uma pasta
 python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
-
-# com animações escolhidas a dedo
 python3 gc3d_cli.py convert abta003.p3m -a andar.frm -a pular.frm -o saida/
-
-# com nome de saída específico
 python3 gc3d_cli.py convert abta003.p3m -o modelos/elesis.glb
-
-# textura em outra pasta
 python3 gc3d_cli.py convert abta003.p3m -o saida/ --texture-dir texturas/
+
+# voltar para o jogo
+python3 gc3d_cli.py convert personagem.glb -o saida/
+python3 gc3d_cli.py convert personagem.glb -o saida/ --no-animations
 ```
 
-### `batch` — muitos modelos
+### `batch` — muitos arquivos
 
 ```bash
+# extrair uma pasta inteira, casando animações automaticamente
 python3 gc3d_cli.py batch "GRAND CHASE/Models" \
-    --anim-dir "GRAND CHASE/ANIMACOES" \
-    -o saida/
-```
+    --anim-dir "GRAND CHASE/ANIMACOES" -o saida/
 
-Percorre recursivamente, converte todo `.p3m` encontrado e, para cada um, inclui
-as animações compatíveis. Cada modelo gera `<nome>.glb` na pasta de saída.
+# devolver uma pasta de modelos editados
+python3 gc3d_cli.py batch modelos_editados/ -o saida/
 
-```bash
-# várias pastas de uma vez, sem entrar em subpastas
+# várias pastas, sem entrar em subpastas
 python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 ```
 
@@ -137,7 +140,8 @@ python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 | `--anim-dir` | inclui as animações compatíveis da pasta |
 | `--texture` | usa esta textura específica |
 | `--texture-dir` | pasta extra onde procurar; pode repetir |
-| `--no-texture` | não procura nem embute textura |
+| `--no-texture` | não procura, embute nem extrai textura |
+| `--no-animations` | ao voltar para o jogo, não gera os `.frm` |
 | `--single-sided` | material de um lado só |
 | `--alpha-mode` | `OPAQUE`, `MASK` ou `BLEND` (padrão: automático) |
 | `--keep-normals` | não normaliza normais não unitárias |
@@ -146,7 +150,7 @@ python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 | `-v`, `--verbose` | mostra todos os avisos |
 | `-q`, `--quiet` | só erros |
 
-Código de saída 0 em sucesso, diferente de 0 em falha — usável em script.
+Código de saída 0 em sucesso, diferente de 0 em falha.
 
 ---
 
@@ -162,29 +166,80 @@ Você recebe:
 - um objeto armature chamado `root`, com os ossos nomeados `bone_0`, `bone_1`...;
 - uma **action** por animação, todas em `bpy.data.actions`.
 
+Os nomes `bone_N` não são cosméticos: são eles que permitem devolver o modelo ao
+jogo mantendo a numeração original dos ossos. **Não renomeie os ossos** se você
+pretende reaproveitar os `.frm` que o jogo já tem.
+
 ### Trocar de animação
 
 O importador do Blender atribui apenas a primeira action. Para ver as outras:
 
 1. Selecione o armature.
-2. Abra o editor **Dope Sheet → Action Editor**.
-3. No campo de action, escolha na lista.
+2. Abra **Dope Sheet → Action Editor**.
+3. Escolha na lista de actions.
 
-Com muitas animações, o **Nonlinear Animation** (NLA) editor é mais prático: cada
-action aparece como um strip que você liga e desliga.
+Com muitas animações, o **Nonlinear Animation** (NLA) é mais prático: cada action
+aparece como um strip que você liga e desliga.
+
+### Ajuste importante: FPS 55
+
+As animações do Grand Chase rodam a **55 FPS**. Antes de qualquer coisa, ponha a
+cena em 55 em `Output Properties → Frame Rate → Custom`.
+
+Isso importa por dois motivos: a animação toca na velocidade certa, e — se você
+pretende exportar de volta — o Blender quantiza os instantes dos keyframes no FPS
+da cena. Com 24 FPS (o padrão), uma animação de 120 frames volta com 118.
 
 ### Escala e orientação
 
-Os modelos vêm em escala pequena (o típico fica em torno de 2 unidades de
-altura). Se preferir escala de 1 unidade = 1 metro, escale o armature por 1.0 —
-já está próximo. O eixo Y é para cima no glTF, e o Blender converte para Z-up na
-importação automaticamente.
+Os modelos vêm em escala pequena (o típico fica em torno de 2 unidades de altura).
+O eixo Y é para cima no glTF, e o Blender converte para Z-up na importação
+automaticamente.
 
-### As animações têm 55 keyframes por segundo
+---
 
-A taxa é do motor do jogo, não do arquivo. Se você for renderizar, ajuste o FPS
-da cena para **55** em `Output Properties → Frame Rate → Custom`, senão a
-animação toca em velocidade errada.
+## Devolvendo um modelo ao jogo
+
+### O que você recebe
+
+```
+personagem.p3m                 malha, esqueleto e skinning
+personagem_<animacao>.frm      uma por animação presente no glTF
+personagem.png                 a textura, se estava embutida
+```
+
+### Antes de exportar do Blender
+
+Uma lista curta que evita a maioria dos problemas:
+
+1. **Cena em 55 FPS.**
+2. **Aplique as transformações** de objeto (`Object → Apply → All Transforms`). O
+   bind pose do P3M só guarda translação; rotação ou escala num objeto acima dos
+   ossos é perdida, e o conversor avisa quando isso acontece.
+3. **Triangule a malha** (`Modifier → Triangulate`, ou marque a opção no
+   exportador). Primitivas que não são triângulos são ignoradas.
+4. **Mantenha os nomes `bone_N`** se quiser reaproveitar os `.frm` do jogo.
+5. Ao exportar, marque **Include → Animations** e escolha o modo **Actions** para
+   levar todas as animações, não só a ativa.
+
+### O que o formato do jogo impõe
+
+| Restrição | O que acontece se você passar |
+|-----------|-------------------------------|
+| **Um osso por vértice** | fica o de maior peso, com aviso da quantidade |
+| **Uma malha por arquivo** | todas as primitivas são mescladas, com aviso |
+| **Máximo 255 ossos** | erro explicando quanto reduzir |
+| **Máximo 65535 vértices** | erro; use Decimate ou divida a malha |
+| **Máximo 65535 triângulos** | erro |
+| Sem morph targets | ignorados, com aviso |
+
+As animações são **reamostradas para 55 FPS** automaticamente, então você pode
+animar no FPS que preferir — mas veja a ressalva sobre quantização acima.
+
+### Sobre a textura
+
+Ela volta como `.png`, não como `.dds`. Se o alvo exigir DDS, converta com o GIMP
+(com plugin DDS), o Paint.NET ou o `texconv` da Microsoft.
 
 ---
 
@@ -205,44 +260,74 @@ corrompida sem nenhum aviso.
 
 Em ordem de probabilidade:
 
-1. **O `.dds` não está junto do `.p3m`.** Use `--texture-dir` apontando para a
-   pasta das texturas, ou copie os arquivos para a mesma pasta.
+1. **O `.dds` não está junto do `.p3m`.** Use `--texture-dir`, ou copie os
+   arquivos para a mesma pasta.
 2. **O nome não corresponde.** O conversor procura `<nome do modelo>.dds`. Se a
    textura tem outro nome, indique com `--texture arquivo.dds`.
-3. **No Blender, o viewport está em modo Solid.** Mude para *Material Preview*
-   (a terceira esfera no canto superior direito).
+3. **No Blender, o viewport está em modo Solid.** Mude para *Material Preview*.
 
 Rode com `-v` para ver o que aconteceu na busca.
 
 ### O modelo aparece com partes faltando ou invertidas
 
-Provavelmente back-face culling. Certifique-se de **não** ter usado
-`--single-sided`. No Blender, verifique também
+Provavelmente back-face culling. Não use `--single-sided`. No Blender, verifique
 `Material Properties → Settings → Backface Culling` desmarcado.
 
 ### A animação não aparece
 
-- Confira se o `.frm` é compatível: `info` no modelo e no `.frm`, e compare
-  **angle bones** com **ossos**. Números diferentes significam esqueletos
-  diferentes.
+- Confira a compatibilidade: `info` no modelo e no `.frm`, e compare **angle
+  bones** com **ossos**. Números diferentes significam esqueletos diferentes.
 - No Blender, a action precisa ser selecionada manualmente (ver acima).
 - Se `--anim-dir` reportou "0 animações compatíveis", nenhuma animação daquela
   pasta pertence ao modelo.
 
 ### A animação toca em velocidade errada
 
-Ajuste o FPS da cena para 55.
+Ponha o FPS da cena em 55.
 
-### "nenhum vertice tem osso associado: exportado como malha estatica"
+### "o glTF nao tem nenhuma malha triangulada para converter"
 
-Não é erro. Esse `.p3m` não tem skinning — é um prop ou uma malha convertida de
-outro formato. Você recebe uma malha estática, sem armature, que é o correto.
+A malha não está triangulada, ou as primitivas usam um `mode` diferente de
+TRIANGLES. Adicione um modifier Triangulate, ou marque a opção de triangular no
+exportador do Blender.
+
+### "o modelo tem N ossos e o P3M v0.5 aceita no maximo 255"
+
+O esqueleto é grande demais. Junte ou remova ossos no Blender.
+
+### "a malha tem N vertices e o P3M v0.5 aceita no maximo 65535"
+
+O contador de vértices do formato é um inteiro de 16 bits. Use o modifier Decimate,
+ou divida a malha em partes e exporte cada uma como um `.p3m`.
+
+### "N vertice(s) tinham mais de um osso influente"
+
+Aviso normal ao vir do Blender, que usa skinning suave. O P3M v0.5 só guarda um
+osso por vértice, então fica o de maior peso. Se a deformação ficar ruim numa
+articulação, ajuste os pesos no Blender para que um osso domine claramente.
+
+### "o no raiz do esqueleto tem translacao ... tratada como posicao no mundo"
+
+Aviso normal. O Blender assa o primeiro frame do movimento da raiz na pose de
+descanso; o conversor separa isso de volta, porque essa posição pertence ao `.frm`
+e não ao bind pose. Contá-la duas vezes faria o modelo flutuar no jogo.
+
+### "os ossos foram reordenados para seguir a numeracao bone_N"
+
+Aviso normal. O exportador do Blender usa sua própria ordem de joints; o conversor
+restaura a numeração original do Grand Chase para que os `.frm` existentes
+continuem casando.
+
+### O modelo voltou com mais vértices do que tinha
+
+O Blender divide vértices em costuras de UV e de normal. A geometria é a mesma. Se
+isso for um problema (por causa do limite de 65535), use `Mesh → Merge → By
+Distance` antes de exportar.
 
 ### Aviso "N normais nao unitarias normalizadas"
 
-Normal. Vários arquivos oficiais têm normais fora de escala, e o glTF exige
-normais unitárias. Use `--keep-normals` se por algum motivo quiser preservar os
-valores originais (o resultado pode ficar com sombreamento estranho).
+Normal. Vários arquivos oficiais têm normais fora de escala, e o glTF exige normais
+unitárias. Use `--keep-normals` se quiser preservar os valores originais.
 
 ### Aviso "N bytes extras ignorados no fim do P3M"
 
@@ -250,8 +335,8 @@ Normal, aparece em 115 dos 131 arquivos analisados. São dados que o jogo não u
 
 ### A interface gráfica não abre
 
-Falta o tkinter. No Windows, reinstale o Python marcando **"tcl/tk and IDLE"**.
-No Linux, instale o pacote da sua distribuição:
+Falta o tkinter. No Windows, reinstale o Python marcando **"tcl/tk and IDLE"**. No
+Linux:
 
 ```bash
 sudo dnf install python3-tkinter     # Fedora
@@ -261,26 +346,30 @@ sudo pacman -S tk                    # Arch
 
 A linha de comando funciona sem tkinter.
 
-### Como saber se um `.glb` gerado está bom
+### Como saber se um arquivo gerado está bom
 
 ```bash
+# um GLB
 python3 tools/glb_inspect.py inspect saida/abta003.glb
-```
 
-Mostra a estrutura e roda as verificações de conformidade com o glTF 2.0.
+# um P3M que você acabou de gerar
+python3 gc3d_cli.py info saida/personagem.p3m
+
+# ida e volta completa, comparando com o original
+python3 tools/roundtrip_check.py --anim-dir animacoes/ modelos/
+```
 
 ---
 
 ## Uso como biblioteca
 
-O núcleo é importável, se você quiser automatizar algo específico.
-
 ```python
 import sys
 sys.path.insert(0, "src")
 
-from gc3d import convert_model, ConvertOptions
+from gc3d import convert_model, convert_to_gc, ConvertOptions
 
+# extrair do jogo
 resultado = convert_model(
     "abta003.p3m",
     "saida/abta003.glb",
@@ -288,6 +377,10 @@ resultado = convert_model(
     ConvertOptions(embed_texture=True, texture_dirs=["texturas/"]),
 )
 print(resultado.ok, resultado.summary)
+
+# devolver para o jogo
+resultado = convert_to_gc("personagem.glb", "saida/")
+print(resultado.outputs)   # ['saida/personagem.p3m', 'saida/personagem.png', ...]
 for aviso in resultado.warnings:
     print("aviso:", aviso)
 ```
@@ -295,32 +388,42 @@ for aviso in resultado.warnings:
 Inspecionando os dados crus:
 
 ```python
-from gc3d.formats import p3m, frm
+from gc3d.formats import p3m, frm, gltf_in
 
 modelo = p3m.load_p3m("abta003.p3m")
 print(modelo.num_angle_bones, len(modelo.skin_vertices))
 print(modelo.position_bones[0].position, modelo.position_bones[0].children)
 
 animacao = frm.load_frm("4528.frm")
-print(animacao.num_frames, animacao.num_bones)
 print(animacao.frames[0].bones[0])   # matriz 4x4 column-major, 16 floats
+
+documento = gltf_in.load_gltf("personagem.glb")
+print(len(documento.nodes), len(documento.animations))
 ```
 
-Trabalhando com a cena antes de exportar:
+Montando e gravando uma cena à mão:
 
 ```python
 from gc3d import build_scene
 from gc3d.formats.glb import export_glb, GlbOptions
+from gc3d.formats import p3m, frm
 
 cena = build_scene("abta003.p3m", ["andar.frm"])
 print(cena.summary())
-
-for joint in cena.skeleton:
-    print(joint.name, joint.translation, joint.parent)
-
 cena.normalize_normals()
-cena.to_right_handed()          # obrigatório antes de exportar
+
+# para glTF
+cena.to_right_handed()
 dados = export_glb(cena, GlbOptions(double_sided=True))
+
+# de volta para os formatos do jogo
+cena.to_left_handed()
+p3m.save_p3m(p3m.scene_to_p3m(cena), "saida.p3m")
+for animacao in cena.animations:
+    frm.save_frm(
+        frm.animation_to_frm(animacao, len(cena.skeleton)),
+        f"saida_{animacao.name}.frm",
+    )
 ```
 
 Convertendo texturas isoladamente:

@@ -1,11 +1,9 @@
-# Saida de conversao e de validacao
+# Saida de conversao, validacao e binarios
 /out/
 /dist/
 
-# Artefatos do PyInstaller (o .spec e versionado; o resto nao)
-/build/pyinstaller/
-/build/gc3d/
-/build/gc3d-gui/
+# Artefatos do PyInstaller (os .spec e scripts sao versionados; o resto nao)
+/build/*/pyinstaller/
 *.manifest
 
 # Python
@@ -34,6 +32,8 @@ htmlcov/
 # Arquivos convertidos soltos na raiz
 /*.glb
 /*.gltf
+/*.p3m
+/*.frm
 
 # Blender
 *.blend1

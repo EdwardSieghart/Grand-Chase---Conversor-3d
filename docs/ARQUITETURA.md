@@ -42,42 +42,56 @@ mais valioso do Grand Chase.
 ## Fluxo de dados
 
 Tudo passa por uma representação intermediária. Nenhum leitor conhece nenhum
-escritor.
+escritor, e é isso que torna a conversão bidirecional barata.
 
 ```
-   abta003.p3m ──▶ p3m.read_p3m() ──▶ P3mFile ──▶ p3m_to_scene() ──┐
-                     (bytes crus)     (bytes         (semântica)   │
-                                    interpretados)                 │
+                    ┌──────────────────────────────────────┐
+   abta003.p3m ───▶ │ p3m.read_p3m   ──▶ p3m_to_scene      │──┐
+   4528.frm ──────▶ │ frm.read_frm   ──▶ frm_to_animation  │  │
+                    └──────────────────────────────────────┘  │
+                                                              ▼
+                                                     ┌─────────────────┐
+                                                     │      Scene      │
+                                                     │  (left-handed)  │
+                                                     └─────────────────┘
+                                                        ▲          │
+                       to_left_handed()  ───────────────┘          │  to_right_handed()
                                                                    ▼
-   4528.frm ────▶ frm.read_frm() ──▶ FrmFile ──▶ frm_to_animation() ──▶  Scene
-                                                                   ▲     (left-handed)
-   4529.frm ────▶ ...                                              │        │
-                                                                   ┘        │
-                                                                            ▼
-                                                          Scene.to_right_handed()
-                                                                            │
-                                                                            ▼
-                                                              glb.export_glb()
-                                                                            │
-                                                                            ▼
-                                                                   abta003.glb
+                                                     ┌─────────────────┐
+                                                     │      Scene      │
+                                                     │ (right-handed)  │
+                                                     └─────────────────┘
+                                                        ▲          │
+                    ┌───────────────────────────────────┘          │
+   personagem.glb ─▶│ gltf_in.read_gltf ──▶ gltf_to_scene          │
+                    └──────────────────────────────────────────────┘
+                                                                   │
+   ┌───────────────────────────────────────────────────────────────┘
+   │
+   ├──▶ glb.export_glb ─────────────────────────▶ abta003.glb
+   │
+   └──▶ scene_to_p3m + animation_to_frm ───────▶ personagem.p3m
+                                                 personagem_andar.frm
 ```
 
-O ganho de ter a `Scene` no meio é que adicionar um formato custa **um** módulo,
-não N × M conversores. Escrever `.fbx` amanhã significa escrever
-`formats/fbx.py` e nada mais.
+O ganho de ter a `Scene` no meio é que cada formato custa **um** módulo, não
+N × M conversores. Escrever `.fbx` amanhã significa escrever `formats/fbx.py` e
+nada mais.
 
 ### Por que existem `P3mFile` e `Scene` separados
 
-`P3mFile` é o arquivo, transcrito fielmente: tem `position_bones` e
-`angle_bones` separados, índices de osso absolutos, o campo de textura com o
-lixo binário que estiver lá. Serve para inspeção e depuração — é o que o comando
-`info` mostra.
+`P3mFile` é o arquivo, transcrito fielmente: tem `position_bones` e `angle_bones`
+separados, índices de osso absolutos, o campo de textura com o lixo binário que
+estiver lá. Serve para inspeção e depuração — é o que o comando `info` mostra.
 
-`Scene` é a *interpretação*: um único tipo de joint, índices resolvidos,
-posições em espaço de cena. Separar os dois evita o erro clássico de parsers
-"espertos" que já interpretam na leitura e, quando o resultado sai errado, não
-deixam distinguir se o problema foi na leitura ou na interpretação.
+`Scene` é a *interpretação*: um único tipo de joint, índices resolvidos, posições
+em espaço de cena. Separar os dois evita o erro clássico de parsers "espertos"
+que já interpretam na leitura e, quando o resultado sai errado, não deixam
+distinguir se o problema foi na leitura ou na interpretação.
+
+Na direção inversa a separação paga de novo: `scene_to_p3m` produz um `P3mFile`,
+e `write_p3m` o serializa. Dá para inspecionar o resultado antes de gravar, e o
+teste de escrita não precisa mexer com bytes.
 
 ---
 
@@ -86,18 +100,24 @@ deixam distinguir se o problema foi na leitura ou na interpretação.
 | Módulo | Responsabilidade | Não sabe sobre |
 |--------|------------------|----------------|
 | `binary.py` | Cursor de bytes little-endian, erros de truncamento com offset | P3M, FRM, glTF |
-| `mathutil.py` | Vetores, matrizes 4×4, quaternions | formatos de arquivo |
+| `mathutil.py` | Vetores, matrizes 4×4, quaternions, slerp | formatos de arquivo |
 | `scene.py` | Estruturas neutras e conversão de sistema de coordenadas | formatos de arquivo |
 | `textures.py` | DDS → RGBA → PNG, busca de arquivo de textura | 3D |
-| `formats/p3m.py` | Ler modelos, achatar a hierarquia de ossos | animação, glTF |
-| `formats/frm.py` | Ler animações | geometria, glTF |
+| `formats/p3m.py` | Ler e escrever modelos, achatar/reconstruir a hierarquia de ossos | animação, glTF |
+| `formats/frm.py` | Ler e escrever animações | geometria, glTF |
 | `formats/glb.py` | Escrever glTF 2.0 binário | P3M, FRM |
-| `convert.py` | Amarrar tudo, coletar avisos, lote | interface |
+| `formats/gltf_in.py` | Ler glTF 2.0, reamostrar animações | P3M, FRM |
+| `convert.py` | Detectar o sentido, amarrar tudo, coletar avisos, lote | interface |
 | `gc3d_cli.py` / `gc3d_gui.py` | Interface com o usuário | formatos binários |
 
-As duas interfaces são intercambiáveis porque chamam exatamente as mesmas
-funções de `convert.py`. Um comportamento que funciona na linha de comando
-funciona na janela, por construção.
+Ler e escrever glTF ficam em módulos separados porque as duas metades quase não
+compartilham código: escrever é montar acessores; ler é resolver acessores,
+hierarquia e reamostragem de animação. Juntá-las produziria um arquivo grande sem
+ganho nenhum.
+
+As duas interfaces são intercambiáveis porque chamam exatamente as mesmas funções
+de `convert.py`. Um comportamento que funciona na linha de comando funciona na
+janela, por construção.
 
 ---
 
@@ -199,8 +219,8 @@ Os dados reais têm defeitos, e o conversor não pode desistir por causa deles:
 
 | Situação | Frequência | Tratamento |
 |----------|-----------|------------|
-| Bytes extras no fim do arquivo | 84 de 131 arquivos | ignorados, contados no aviso |
-| Bloco `MeshVertex` truncado | 2 arquivos | tolerado (esses vértices não são usados) |
+| Bytes extras no fim do arquivo | 115 de 131 arquivos | ignorados, contados no aviso |
+| Bloco `MeshVertex` truncado | 3 arquivos | tolerado (esses vértices não são usados) |
 | Normais não unitárias | comum | normalizadas, com aviso |
 | Campo de textura com lixo binário | alguns | descartado por `_clean_texture_name` |
 | Peso 0.5 em vez de 1.0 | 3 arquivos | preservado como está |
@@ -211,16 +231,169 @@ silêncio. Aí o leitor levanta erro com o índice e o limite na mensagem.
 
 ---
 
+## A direção inversa: glTF de volta para o jogo
+
+Esta metade é mais difícil que a direta, por um motivo simples: na ida, a entrada
+é um arquivo de um jogo específico, com convenções fixas. Na volta, a entrada pode
+ter vindo de qualquer ferramenta, cada uma com suas próprias escolhas dentro do que
+o glTF permite.
+
+### Reamostragem de animação para 55 FPS
+
+O importador do conversor antigo trazia um aviso no topo do arquivo — *"GLTF
+importing does not work properly yet"* — e a causa principal era assumir que os
+keyframes já vinham amostrados a 55 FPS. Nenhuma ferramenta de autoria faz isso: o
+Blender exporta keyframes nos instantes em que o animador os criou, com espaçamento
+irregular.
+
+`gltf_in._read_animation` reamostra: calcula a duração pelo maior tempo declarado,
+percorre a grade de `1/55 s` e avalia cada canal no instante exato, respeitando a
+interpolação declarada (`LINEAR`, `STEP`, `CUBICSPLINE`). Rotação usa **slerp**, não
+interpolação componente a componente — esta última encurta o arco e produz variação
+de velocidade visível.
+
+Na prática, uma animação que o Blender exportou com 52 keyframes volta com 118.
+
+### Reconstrução da hierarquia dual
+
+Ao escrever, o caminho inverso do achatamento: **um PositionBone por AngleBone**,
+em correspondência 1 para 1.
+
+```
+PositionBone[i] = posição do joint i, filhos = [i]
+AngleBone[i]    = filhos = joint[i].children
+```
+
+Isso difere um pouco dos arquivos originais, onde um mesmo PositionBone às vezes
+serve a dois AngleBones raiz — daí `numPositionBones` mudar de 14 para 15 num
+ciclo de ida e volta. Mas o que o jogo usa é a lista de **AngleBones**, e ela fica
+idêntica, na mesma ordem e com os mesmos índices. O teste de ida e volta verifica
+exatamente isso: compara o *joint resolvido* de cada vértice, não o índice
+absoluto.
+
+### Índice de osso: escolher a codificação certa
+
+O escritor decide entre `u8` e `u32` pelo total de ossos:
+
+```python
+total_bones = num_position_bones + len(angle_bones)
+use_u32 = total_bones > 255
+```
+
+Isso não é zelo preventivo: sem essa escolha, um modelo com 248 ossos gerava
+`bone_index` truncado por `& 0xFF` e vértices grudados no osso errado. Foi um bug
+real, pego pelo teste de ida e volta.
+
+### Preservar a numeração dos ossos
+
+O exportador do Blender reordena `skin.joints`. Se aceitássemos a ordem dele, a
+numeração dos ossos mudaria a cada ida e volta, e os `.frm` que o jogo já tem
+deixariam de casar com o `.p3m` novo.
+
+`_joint_order` resolve: quando todos os ossos têm nome `bone_N`, os joints são
+reordenados por N, restaurando a numeração original do Grand Chase. Isso permite
+trocar a malha no Blender e continuar usando as animações existentes.
+
+### Onde mora a posição do personagem no mundo
+
+Este foi o ponto mais sutil. O `pos_y` do FRM é a posição **absoluta** do
+personagem, e na exportação para glTF ela vira um canal de `translation` no nó
+`root`. O Blender, ao importar e reexportar, **assa o primeiro keyframe desse
+canal na pose de descanso** — o offset aparece tanto no nó `root` quanto nos dados
+de `POSITION`.
+
+Se essa translação entrasse no bind pose do P3M, o jogo somaria o deslocamento
+duas vezes e o modelo flutuaria. A regra adotada:
+
+> A posição do personagem no mundo pertence à animação, não ao bind pose.
+
+Concretamente, o nó raiz do esqueleto é excluído da acumulação
+(`_world_translation(..., stop_at=root)`) **e** seu offset é subtraído das posições
+dos vértices (`_root_world_offset`). Com isso, o bind pose reconstruído bate
+exatamente com o original — desvio de bounding box zero — mesmo depois de passar
+pelo Blender.
+
+### `JOINTS_0` indexa `skin.joints`, não os nós
+
+Erro fácil de cometer e difícil de notar: os valores em `JOINTS_0` são índices no
+array `skin.joints`, não índices de nó. Nos arquivos gerados por este próprio
+conversor as duas ordens coincidem, então tratar um pelo outro *funciona* — e
+gruda os vértices no osso errado em qualquer arquivo de outra ferramenta.
+
+O importador monta `skin_index_to_joint` explicitamente, e há um teste com
+`skin.joints` invertido de propósito para travar esse comportamento.
+
+### Perdas inevitáveis, e por que não importam aqui
+
+| Recurso do glTF | O que acontece | Por que é aceitável |
+|-----------------|----------------|---------------------|
+| Vários ossos por vértice | fica o de maior peso | o P3M v0.5 não tem skinning suave |
+| Várias malhas/primitivas | mescladas em uma | o P3M v0.5 guarda uma malha |
+| Rotação/escala em nó acima dos ossos | perdida, com aviso | o bind pose do P3M é só translação |
+| Translação por osso na animação | não gravada | medimos: **zero** das 93.319 matrizes dos 68 FRM oficiais têm translação (99,92% rotação pura, 0,08% zeradas) |
+| Morph targets | ignorados, com aviso | não existem no FRM |
+
+A linha da translação por osso é a mais interessante: em vez de supor, medimos a
+coleção inteira. Exportar só canais de rotação para o glTF não perde nada.
+
+---
+
 ## Interface gráfica e threads
+
+A janela é uma tela só, e o **sentido da conversão não é escolhido pelo usuário**:
+é derivado das extensões do que foi carregado. Dado o conteúdo da lista, só existe
+um destino possível, e oferecer a escolha seria criar a chance de errar. Se
+houver mistura de glTF com arquivos do jogo, o glTF ganha e o resto é reportado
+como ignorado — converter nos dois sentidos ao mesmo tempo não tem significado.
+
+A lista é limpa ao terminar. É deliberado: o estado depois da conversão é
+"trabalho concluído", e deixar os arquivos ali convida a clicar em Converter de
+novo por engano.
+
+O tema escuro é aplicado à mão, em `apply_dark_theme`, porque o tkinter não tem
+um. O tema `clam` é recolorido widget por widget, e os widgets clássicos
+(`Listbox`, `Text`) recebem cores direto, porque não passam pelo `ttk.Style`. A
+paleta é fixa em vez de seguir o sistema: detectar GTK ou o tema do Windows daria
+trabalho e o tkinter não acompanharia de todo jeito. Fixa, a aparência é a mesma
+nas duas plataformas.
 
 A conversão roda em uma thread separada, mas **essa thread nunca toca em
 widgets**. Ela empilha mensagens numa `queue.Queue`, e a thread da interface
-consome a fila a cada 100 ms em `_drain_queue`. Tkinter não é thread-safe;
+consome a fila a cada 80 ms em `_drain_queue`. Tkinter não é thread-safe;
 atualizar widget de outra thread causa travamento intermitente, do tipo que só
 aparece na máquina do usuário.
 
 O cancelamento usa `threading.Event`, checado entre arquivos. Não interrompe uma
-conversão pela metade, o que evita arquivo `.glb` truncado no disco.
+conversão pela metade, o que evita arquivo truncado no disco.
+
+---
+
+## Empacotamento
+
+`build/` é organizado por plataforma para que as saídas não se misturem:
+
+```
+build/common/gc3d.spec     receita compartilhada do PyInstaller
+build/linux/build.sh       ->  dist/linux/
+build/windows/build.bat    ->  dist\windows\   (rodando no Windows)
+build/windows/build_wine.sh ->  dist/windows/  (rodando no Linux, via Wine)
+```
+
+Duas decisões que custaram depuração:
+
+**Sem `MERGE()`.** O `MERGE` do PyInstaller move as dependências compartilhadas
+para o primeiro executável. Isso funciona em build de pasta (onedir) e **quebra**
+em build de arquivo único: o segundo binário fica sem a `libpython` e morre no
+boot com *"Failed to load Python shared library"*. Dois `Analysis` independentes
+custam alguns megabytes a mais e cada binário roda por conta própria.
+
+**Wine para o `.exe`.** O PyInstaller não faz cross-compile — empacota o
+interpretador da plataforma onde roda. `build_wine.sh` roda o PyInstaller *dentro
+do Wine*, sobre um Python para Windows baixado num prefixo próprio
+(`~/.gc3d-wine`, sem tocar no `~/.wine` do usuário). A distribuição embutida do
+Python não inclui tkinter, então o script tenta obter `_tkinter.pyd` e as
+bibliotecas Tcl/Tk do pacote NuGet do Python; se não conseguir, avisa que só o
+executável de linha de comando é confiável.
 
 ---
 
@@ -229,13 +402,20 @@ conversão pela metade, o que evita arquivo `.glb` truncado no disco.
 `tools/` não faz parte do programa; existe para provar que ele funciona.
 
 - **`glb_inspect.py`** — parser de GLB independente do escritor. Verifica
-  invariantes que importadores reais cobram: alinhamento de acessor,
-  bufferView dentro do buffer, hierarquia de nós sem nó com dois pais, contagem
-  de inverse bind matrices igual à de joints, índices dentro do número de
-  vértices. Também compara dois GLB atributo por atributo.
+  invariantes que importadores reais cobram: alinhamento de acessor, bufferView
+  dentro do buffer, hierarquia de nós sem nó com dois pais, contagem de inverse
+  bind matrices igual à de joints, índices dentro do número de vértices. Também
+  compara dois GLB atributo por atributo.
+- **`validate_all.py`** — varre uma coleção inteira na direção direta e confere
+  cada saída.
+- **`roundtrip_check.py`** — `P3M/FRM → GLB → P3M/FRM`, comparando com o
+  original. Foi esta ferramenta que encontrou o bug do índice `u32`.
 - **`blender_check.py`** — importa os arquivos no Blender de verdade e relata
-  malha, esqueleto, pesos, UVs, textura e animações. Validação estrutural diz
-  que o arquivo está bem formado; isto diz que ele é *utilizável*.
+  malha, esqueleto, pesos, UVs, textura e animações. Validação estrutural diz que
+  o arquivo está bem formado; isto diz que ele é *utilizável*.
+- **`blender_reexport.py`** — reexporta pelo Blender, fechando o ciclo
+  `nosso GLB → Blender → GLB do Blender → nosso P3M`. Foi este ciclo que expôs os
+  dois bugs mais sutis do importador (o `JOINTS_0` e a translação de ancestrais).
 
 A separação é intencional: o inspetor foi escrito a partir da especificação do
 glTF, não do código do exportador. Se os dois compartilhassem lógica, um erro de
@@ -247,14 +427,21 @@ entendimento comum passaria despercebido nos dois.
 
 | Objetivo | Onde |
 |----------|------|
-| Suportar P3M v0.6/0.7/0.8/1.0 | `formats/p3m.py`: novo `_read_vXX`, registrar em `SUPPORTED_VERSIONS` e no dispatch de `read_p3m` |
+| Suportar P3M v0.6/0.7/0.8/1.0 na leitura | `formats/p3m.py`: novo `_read_vXX`, registrar em `SUPPORTED_VERSIONS` e no dispatch de `read_p3m` |
 | Suportar FRM v1.2 | `formats/frm.py`: novo `_read_v12`; ver a seção de v1.2 da especificação (Bones = rotação, Bones2 = translação) |
-| Novo formato de saída | novo módulo em `formats/`, consumindo `Scene`; nada mais muda |
-| Escrever P3M de volta | `formats/p3m.py`: função de escrita usando `BinaryWriter`, mais um importador de glTF |
+| Skinning suave (vários ossos por vértice) | `scene.Vertex` precisa virar lista de `(joint, weight)`; `glb.py` já escreve `VEC4`, então cabem 4 influências sem mudar o formato de saída |
+| Novo formato de saída | novo módulo em `formats/`, consumindo `Scene` |
+| Novo formato de entrada | novo módulo em `formats/`, produzindo `Scene` |
+| Exportar textura como `.dds` | `textures.py`: escritor de DDS A8R8G8B8 sem compressão; `convert.convert_to_gc` decide a extensão |
 | Mudar aparência do material | `formats/glb.py`, função `_add_material` |
+| Mudar a paleta da interface | `gc3d_gui.py`, classe `Dark` |
 
-Ao acrescentar suporte a uma versão, o caminho que funcionou aqui foi: primeiro
-medir o tamanho previsto do arquivo contra o real em toda a coleção disponível,
-depois checar invariantes semânticas (índices de face no intervalo, índices de
-osso no intervalo, pesos ≈ 1, normais ≈ unitárias). Layout errado quase sempre
-viola uma dessas antes de gerar um arquivo plausível.
+Ao acrescentar suporte a uma versão de formato, o caminho que funcionou aqui foi:
+primeiro medir o tamanho previsto do arquivo contra o real em toda a coleção
+disponível, depois checar invariantes semânticas (índices de face no intervalo,
+índices de osso no intervalo, pesos ≈ 1, normais ≈ unitárias). Layout errado
+quase sempre viola uma dessas antes de gerar um arquivo plausível.
+
+E, ao mexer na conversão, rode `roundtrip_check.py`: ele pega classes de erro que
+nem os testes unitários nem a validação estrutural do glTF pegam, porque compara o
+resultado com o arquivo de origem.

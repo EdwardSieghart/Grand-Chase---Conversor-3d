@@ -31,17 +31,21 @@ Observacoes importantes descobertas na validacao
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
 
-from ..binary import BinaryReader, TruncatedDataError
+from ..binary import BinaryReader, BinaryWriter, TruncatedDataError
 from ..scene import NO_JOINT, Joint, Mesh, Scene, Vertex
 
 __all__ = [
     "P3M_HEADER_PREFIX",
+    "P3M_HEADER_V05",
     "P3M_HEADER_SIZE",
     "TEXTURE_NAME_SIZE",
     "INVALID_BONE_INDEX",
     "MAX_BONE_CHILDREN",
+    "MAX_BONES",
+    "MAX_VERTICES",
     "PositionBone",
     "AngleBone",
     "SkinVertex",
@@ -49,11 +53,15 @@ __all__ = [
     "P3mFile",
     "UnsupportedVersionError",
     "InvalidP3mError",
+    "P3mLimitError",
     "detect_version",
     "read_p3m",
     "load_p3m",
     "p3m_to_scene",
     "build_joints",
+    "scene_to_p3m",
+    "write_p3m",
+    "save_p3m",
 ]
 
 #: Prefixo do cabecalho. O erro de grafia ("Perfact") esta no formato original.
@@ -67,6 +75,11 @@ TEXTURE_NAME_SIZE = 260
 INVALID_BONE_INDEX = 0xFF
 #: Cada osso tem espaco fixo para 10 filhos.
 MAX_BONE_CHILDREN = 10
+#: O contador de ossos e um u8, e 0xFF e reservado como sentinela.
+MAX_BONES = 255
+#: Os contadores de vertice e de face sao u16.
+MAX_VERTICES = 0xFFFF
+MAX_FACES = 0xFFFF
 
 POSITION_BONE_SIZE = 24
 ANGLE_BONE_SIZE = 28
@@ -91,6 +104,10 @@ class UnsupportedVersionError(InvalidP3mError):
             f"Versoes suportadas: {', '.join(SUPPORTED_VERSIONS)}. "
             f"O layout desta versao esta descrito em docs/ESPECIFICACAO_FORMATOS.md."
         )
+
+
+class P3mLimitError(ValueError):
+    """A cena nao cabe nos limites do formato P3M v0.5."""
 
 
 # ---------------------------------------------------------------- estruturas
@@ -496,3 +513,202 @@ def p3m_to_scene(p3m: P3mFile, name: str = "model") -> Scene:
     )
     scene.unskinned_vertices = len(vertices) - skinned
     return scene
+
+
+# ------------------------------------------------------------------- escrita
+
+
+def scene_to_p3m(scene: Scene, texture_name: str = "") -> P3mFile:
+    """Converte uma `Scene` left-handed em um `P3mFile` v0.5.
+
+    Reconstrucao da hierarquia dual
+    -------------------------------
+    O P3M precisa de duas listas de ossos, e a `Scene` tem uma. A reconstrucao
+    usa **um PositionBone por AngleBone**, em correspondencia 1 para 1:
+
+        PositionBone[i] = posicao do joint i, filhos = [i]
+        AngleBone[i]    = filhos = joint[i].children
+
+    Isso difere um pouco dos arquivos originais, onde um mesmo PositionBone as
+    vezes serve a dois AngleBones raiz. Mas o que importa para o jogo e a lista
+    de AngleBones — e ela que vertices e keyframes referenciam — e essa fica
+    identica, na mesma ordem e com os mesmos indices. A leitura de volta
+    reproduz exatamente a `Scene` de origem, o que os testes de ida e volta
+    verificam.
+
+    Levanta `P3mLimitError` quando a cena nao cabe no formato.
+    """
+    if scene.right_handed:
+        raise ValueError(
+            "a cena esta em right-handed; chame Scene.to_left_handed() antes de "
+            "gravar P3M"
+        )
+
+    joints = scene.skeleton
+    if len(joints) > MAX_BONES:
+        raise P3mLimitError(
+            f"o modelo tem {len(joints)} ossos e o P3M v0.5 aceita no maximo "
+            f"{MAX_BONES}. Reduza o esqueleto antes de exportar."
+        )
+
+    mesh = scene.meshes[0] if scene.meshes else Mesh()
+    if len(mesh.vertices) > MAX_VERTICES:
+        raise P3mLimitError(
+            f"a malha tem {len(mesh.vertices)} vertices e o P3M v0.5 aceita no "
+            f"maximo {MAX_VERTICES} (o contador e um u16). Reduza a malha "
+            f"(decimate) ou divida em partes."
+        )
+    face_count = len(mesh.indices) // 3
+    if face_count > MAX_FACES:
+        raise P3mLimitError(
+            f"a malha tem {face_count} triangulos e o P3M v0.5 aceita no maximo "
+            f"{MAX_FACES}."
+        )
+
+    p3m = P3mFile(version="0.5")
+    p3m.version_header = P3M_HEADER_V05[:-1].decode("latin-1")
+    p3m.texture_name = texture_name
+
+    for index, joint in enumerate(joints):
+        p3m.position_bones.append(
+            PositionBone(position=joint.translation, children=[index])
+        )
+        p3m.angle_bones.append(
+            AngleBone(
+                position=(0.0, 0.0, 0.0),
+                scale=0.0,
+                children=[c for c in joint.children if c < MAX_BONES][
+                    :MAX_BONE_CHILDREN
+                ],
+            )
+        )
+
+    num_position_bones = len(p3m.position_bones)
+    world = scene.world_translations()
+
+    # O indice de osso gravado no vertice e absoluto (joint + numPositionBones),
+    # logo o maior valor possivel e 2 * numJoints - 1. Quando isso passa de 255
+    # nao cabe em um byte, e e obrigatorio usar a codificacao u32 — a mesma que
+    # os arquivos com muitos ossos usam. Escolher errado aqui gera indices
+    # truncados e vertices grudados no osso errado.
+    total_bones = num_position_bones + len(p3m.angle_bones)
+    use_u32 = total_bones > MAX_BONES
+    p3m.bone_index_encoding = "u32" if use_u32 else "u8"
+
+    for vertex in mesh.vertices:
+        joint = vertex.joint
+        if 0 <= joint < len(world):
+            offset = world[joint]
+            # Espelha exatamente a leitura, que soma esse offset.
+            position = (
+                vertex.position[0] - offset[0],
+                vertex.position[1] - offset[1],
+                vertex.position[2] - offset[2],
+            )
+            bone_index = joint + num_position_bones
+            weight = vertex.weight if vertex.weight > 0.0 else 1.0
+            index_bytes = _pack_bone_index(bone_index, use_u32)
+        else:
+            position = vertex.position
+            bone_index = INVALID_BONE_INDEX
+            weight = 1.0
+            index_bytes = bytes([INVALID_BONE_INDEX] * 4)
+
+        p3m.skin_vertices.append(
+            SkinVertex(
+                position=position,
+                weight=weight,
+                bone_index=bone_index,
+                bone_index_bytes=index_bytes,
+                normal=vertex.normal,
+                uv=vertex.uv,
+            )
+        )
+        # O bloco MeshVertex nao e usado pelo jogo, mas os arquivos oficiais o
+        # trazem; gravamos para manter o arquivo com a mesma forma.
+        p3m.mesh_vertices.append(
+            MeshVertex(
+                position=vertex.position, normal=vertex.normal, uv=vertex.uv
+            )
+        )
+
+    for i in range(0, len(mesh.indices) - 2, 3):
+        p3m.faces.append(
+            (mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2])
+        )
+
+    return p3m
+
+
+def write_p3m(p3m: P3mFile) -> bytes:
+    """Serializa um `P3mFile` nos bytes de um arquivo P3M v0.5."""
+    writer = BinaryWriter()
+    writer.bytes(P3M_HEADER_V05)
+    writer.u8(len(p3m.position_bones))
+    writer.u8(len(p3m.angle_bones))
+
+    for pbone in p3m.position_bones:
+        writer.f32s(pbone.position)
+        writer.bytes(_pack_children(pbone.children))
+        # Padding de alinhamento: os arquivos originais trazem 0xFFFF.
+        writer.bytes(b"\xff\xff")
+
+    for abone in p3m.angle_bones:
+        writer.f32s(abone.position)
+        writer.f32(abone.scale)
+        writer.bytes(_pack_children(abone.children))
+        writer.bytes(b"\xff\xff")
+
+    writer.u16(len(p3m.skin_vertices))
+    writer.u16(len(p3m.faces))
+    writer.cstring(p3m.texture_name, TEXTURE_NAME_SIZE)
+
+    for face in p3m.faces:
+        writer.u16s(face)
+
+    for vertex in p3m.skin_vertices:
+        writer.f32s(vertex.position)
+        writer.f32(vertex.weight)
+        writer.bytes(vertex.bone_index_bytes)
+        writer.f32s(vertex.normal)
+        writer.f32s(vertex.uv)
+
+    for mesh_vertex in p3m.mesh_vertices:
+        writer.f32s(mesh_vertex.position)
+        writer.f32s(mesh_vertex.normal)
+        writer.f32s(mesh_vertex.uv)
+
+    return writer.getvalue()
+
+
+def _pack_children(children: list[int]) -> bytes:
+    """10 bytes de indices de filhos, preenchidos com o sentinela 0xFF."""
+    padded = list(children[:MAX_BONE_CHILDREN])
+    padded += [INVALID_BONE_INDEX] * (MAX_BONE_CHILDREN - len(padded))
+    return bytes(value & 0xFF for value in padded)
+
+
+def _pack_bone_index(bone_index: int, use_u32: bool) -> bytes:
+    """Os 4 bytes do campo de indice de osso, na codificacao escolhida.
+
+    `u8`  — `(indice, indice, 0xFF, 0xFF)`, como nos arquivos oficiais.
+    `u32` — inteiro little-endian, obrigatorio acima de 255 ossos totais.
+    """
+    if use_u32:
+        return struct.pack("<I", bone_index)
+    return bytes(
+        (
+            bone_index & 0xFF,
+            bone_index & 0xFF,
+            INVALID_BONE_INDEX,
+            INVALID_BONE_INDEX,
+        )
+    )
+
+
+def save_p3m(p3m: P3mFile, path) -> int:
+    """Grava um `P3mFile` em disco. Devolve o tamanho em bytes."""
+    data = write_p3m(p3m)
+    with open(path, "wb") as handle:
+        handle.write(data)
+    return len(data)

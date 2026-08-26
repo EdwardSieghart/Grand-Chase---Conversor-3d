@@ -1,27 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Receita do PyInstaller para gerar os executaveis do Grand Chase 3D Importer.
+"""Receita compartilhada do PyInstaller, usada pelos dois sistemas.
 
 Gera dois binarios a partir do mesmo codigo:
 
-* `gc3d`      — a interface de linha de comando (console)
-* `gc3d-gui`  — a interface grafica (sem janela de console no Windows)
+* `gc3d`      — linha de comando (console)
+* `gc3d-gui`  — interface grafica (sem janela de console no Windows)
 
-Uso:
-    pyinstaller build/gc3d.spec --noconfirm --clean
+Nao chame este arquivo direto; use os scripts por plataforma:
 
-Rode no proprio sistema de destino: o PyInstaller nao faz cross-compile. Para o
-executavel do Windows, rode em uma maquina Windows (ou no Wine).
+    build/linux/build.sh          gera binarios Linux em dist/linux/
+    build/windows/build.bat       gera .exe em dist\\windows\\  (rodar no Windows)
+    build/windows/build_wine.sh   gera .exe a partir do Linux, usando Wine
+
+O nome da pasta de saida vem da variavel de ambiente GC3D_DIST_NAME, definida
+pelos scripts, para que Linux e Windows nao sobrescrevam um ao outro.
 """
 
 import os
 
 # O .spec e executado com exec(), sem __file__ confiavel; o PyInstaller define
 # SPECPATH com o diretorio do arquivo.
-PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))  # noqa: F821
+PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))  # noqa: F821
 SRC = os.path.join(PROJECT_ROOT, "src")
 
-# O pacote nao tem dependencias externas; excluimos modulos grandes que o
-# PyInstaller as vezes puxa por engano, para o binario ficar pequeno.
+# O pacote nao tem dependencias externas; excluimos modulos grandes da
+# biblioteca padrao que o PyInstaller as vezes puxa por engano, para o binario
+# ficar pequeno.
 EXCLUDES = [
     "numpy",
     "PIL",
@@ -37,8 +41,13 @@ EXCLUDES = [
     "html",
     "http",
     "xml",
-    "urllib",
 ]
+
+# NAO usamos MERGE(): ele move as dependencias compartilhadas para o primeiro
+# executavel, o que funciona em build de pasta (onedir) mas quebra em build de
+# arquivo unico — o segundo binario fica sem a libpython e morre no boot com
+# "Failed to load Python shared library". Dois Analysis independentes custam
+# alguns megabytes a mais e cada binario roda por conta propria.
 
 cli_analysis = Analysis(  # noqa: F821
     [os.path.join(PROJECT_ROOT, "gc3d_cli.py")],
@@ -59,14 +68,6 @@ gui_analysis = Analysis(  # noqa: F821
     excludes=EXCLUDES,
     noarchive=False,
 )
-
-MERGE_NOTE = """
-Nao usamos MERGE(): ele move as dependencias compartilhadas para o primeiro
-executavel, o que funciona em build de pasta (onedir) mas quebra em build de
-arquivo unico -- o segundo binario fica sem a libpython e morre no boot com
-"Failed to load Python shared library". Dois Analysis independentes custam
-alguns megabytes a mais e cada binario roda por conta propria.
-"""
 
 cli_pyz = PYZ(cli_analysis.pure, cli_analysis.zipped_data)  # noqa: F821
 gui_pyz = PYZ(gui_analysis.pure, gui_analysis.zipped_data)  # noqa: F821
