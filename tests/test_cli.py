@@ -114,7 +114,29 @@ class TestCliConvert(unittest.TestCase):
                 "convert", self.model, "-o", tmp, "--anim-dir", SAMPLES_FRM, "--no-texture"
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("compativel", result.stdout)
+            self.assertIn("serao incluidas", result.stdout)
+
+    def test_all_anims_ignores_bone_matching(self) -> None:
+        """`--all-anims` deve incluir mais animacoes que o casamento por ossos."""
+        if not os.path.isdir(SAMPLES_FRM):
+            self.skipTest("samples/frm ausente")
+
+        def contagem(saida: str) -> int:
+            # A primeira linha e "N de M animacao(oes) ... serao incluidas".
+            return int(saida.split(" de ", 1)[0].strip())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            casado = run_cli(
+                "convert", self.model, "-o", tmp, "--anim-dir", SAMPLES_FRM,
+                "--no-texture",
+            )
+            todas = run_cli(
+                "convert", self.model, "-o", tmp, "--anim-dir", SAMPLES_FRM,
+                "--all-anims", "--no-texture",
+            )
+        self.assertEqual(casado.returncode, 0, casado.stderr)
+        self.assertEqual(todas.returncode, 0, todas.stderr)
+        self.assertGreater(contagem(todas.stdout), contagem(casado.stdout))
 
     def test_convert_nonexistent_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

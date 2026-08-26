@@ -4,7 +4,7 @@ Arquivo de contexto para quem for continuar este trabalho — pessoa ou assisten
 de IA. Reúne o estado atual, as decisões já tomadas (com o motivo), o que foi
 verificado e onde estão as fontes, para não ser necessário refazer a investigação.
 
-Versão 1.1.0. Última atualização: 2026-08-26.
+Versão 1.2.0. Última atualização: 2026-08-26.
 
 ---
 
@@ -44,7 +44,9 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | Skinning suave (multi-osso) | **não suportado**; fica o osso de maior peso |
 | CLI | `info`, `convert`, `batch`, nos dois sentidos |
 | GUI | tela única, tema escuro, direção automática, limpa a lista ao fim |
-| Testes | 130, só com a biblioteca padrão |
+| Arrastar e soltar | via `tkinterdnd2`, **opcional** em runtime e embutido nos executáveis |
+| Muitas animações num só GLB | suportado; painel na GUI e `--all-anims` na CLI |
+| Testes | 147, só com a biblioteca padrão |
 | Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
 | Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
 | Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
@@ -235,6 +237,9 @@ errada e o personagem anima ao contrário. Há um teste específico
 | Interpolação linear nas animações | o jogo usa Bézier com tangentes desconhecidas; a 55 Hz a diferença é desprezível |
 | Sem `MERGE()` no PyInstaller | `MERGE` quebra build de arquivo único: o segundo binário fica sem libpython |
 | Thread de trabalho comunica por `queue` | tkinter não é thread-safe; atualizar widget de outra thread trava de forma intermitente |
+| `tkinterdnd2` opcional em runtime, embutido no build | tkinter não tem drag and drop; assim o usuário final ganha o recurso sem quebrar a regra de zero dependências para rodar |
+| `AnimationIndex` compartilhado entre CLI e GUI | lê cada `.frm` uma vez e garante que as duas interfaces selecionem igual |
+| Avisar quando nenhuma animação casa | antes era silencioso e parecia que o programa não suportava várias animações |
 
 ---
 
@@ -282,6 +287,13 @@ De ferramental:
     file".
 17. **O `abta180169.glb` do conversor antigo não é par do `mesh_abta180169.p3m`.**
     Nome interno da malha indica origem diferente. Não serve como referência.
+18. **O tkdnd entrega os caminhos como lista Tcl**, com chaves nos que têm espaço:
+    `{/a b/c.p3m} /d.frm`. Um `split()` quebra o caso comum, porque as pastas deste
+    projeto têm espaço no nome. Ver `_parse_drop_data` e seus sete testes.
+19. **A dica de lista vazia precisa de `_refresh_list()` na inicialização.**
+    Chamar só `_refresh_direction()` deixava a dica de arrastar invisível ao abrir.
+20. **`spectacle -a` captura a janela ativa, que pode não ser a do programa.** Para
+    conferir a interface por screenshot, use `import -window "<titulo da janela>"`.
 
 ---
 

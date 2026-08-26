@@ -48,16 +48,50 @@ dist\windows\gc3d-gui.exe # executável Windows
 
 ### Fluxo básico
 
-1. **Adicionar pasta** e escolha a pasta com os arquivos. A busca é recursiva, e
-   tudo vai para a mesma lista — modelos, animações e glTF juntos.
-2. Confira a faixa azul no topo: ela diz o sentido detectado e o que encontrou,
-   por exemplo `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes)`.
-3. Escolha a pasta de saída.
-4. **Converter**.
+1. **Arraste os arquivos ou pastas** para dentro da janela — ou use **Adicionar
+   arquivos** / **Adicionar pasta**. Tudo vai para a mesma lista: modelos,
+   animações e glTF juntos. Pastas são varridas recursivamente, e arquivos de
+   extensão não suportada são descartados com aviso no registro.
+2. Confira a faixa azul no topo: ela diz o sentido detectado e o que será feito,
+   por exemplo `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes), casadas por ossos`.
+3. Em **Animações**, escolha o modo (ver abaixo).
+4. Escolha a pasta de saída.
+5. **Converter**.
 
 A lista é limpa ao terminar. O registro mostra uma linha por arquivo, em verde
 quando dá certo, com os avisos indentados abaixo. **Cancelar** interrompe entre
 arquivos, então não deixa arquivo incompleto no disco.
+
+### Arrastar e soltar
+
+Funciona com arquivos e com pastas, e aceita vários de uma vez. A lista fica
+realçada enquanto você passa por cima dela.
+
+O recurso depende do pacote opcional `tkinterdnd2`. Os executáveis prontos já o
+incluem. Rodando pelo Python:
+
+```bash
+python3 -m pip install tkinterdnd2
+```
+
+Sem ele, a janela funciona exatamente igual, apenas pelos botões — e avisa isso no
+registro ao abrir.
+
+### Muitas animações num único .glb
+
+Este é o caso normal: um personagem tem um modelo e dezenas de animações, e todas
+vão para o **mesmo** arquivo `.glb`. No Blender cada uma aparece como uma *action*.
+
+O painel **Animações** controla quais entram:
+
+| Opção | Quando usar |
+|-------|-------------|
+| **Só as compatíveis com cada modelo** (padrão) | o caso geral; usa o número de ossos como critério |
+| **Todas as animações carregadas em cada modelo** | quando você sabe que as animações pertencem ao modelo apesar da contagem de ossos, ou quer juntar tudo num arquivo de propósito |
+
+Se nenhuma animação casar, o registro **diz o motivo**: quantos ossos o modelo
+tem, quantos as animações têm, e que a verificação pode ser desligada. Foi testado
+com 68 animações e 4.081 keyframes num único arquivo.
 
 ### A opção de textura
 
@@ -108,6 +142,7 @@ conferir o que o Blender realmente exportou antes de converter.
 # extrair do jogo
 python3 gc3d_cli.py convert abta003.p3m -o saida/
 python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
+python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ --all-anims -o saida/
 python3 gc3d_cli.py convert abta003.p3m -a andar.frm -a pular.frm -o saida/
 python3 gc3d_cli.py convert abta003.p3m -o modelos/elesis.glb
 python3 gc3d_cli.py convert abta003.p3m -o saida/ --texture-dir texturas/
@@ -138,6 +173,7 @@ python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 | `-o`, `--output` | arquivo `.glb` ou pasta de destino |
 | `-a`, `--anim` | uma animação a incluir; pode repetir |
 | `--anim-dir` | inclui as animações compatíveis da pasta |
+| `--all-anims` | inclui **todas** as animações, sem exigir o mesmo número de ossos |
 | `--texture` | usa esta textura específica |
 | `--texture-dir` | pasta extra onde procurar; pode repetir |
 | `--no-texture` | não procura, embute nem extrai textura |
@@ -273,6 +309,15 @@ Rode com `-v` para ver o que aconteceu na busca.
 Provavelmente back-face culling. Não use `--single-sided`. No Blender, verifique
 `Material Properties → Settings → Backface Culling` desmarcado.
 
+### "nenhuma das N animações carregadas casa com este modelo"
+
+O modelo e as animações têm números de ossos diferentes, então pertencem a
+esqueletos diferentes. O aviso mostra os dois números.
+
+Se você tem certeza de que as animações são desse modelo, ligue **Incluir todas as
+animações** na janela, ou use `--all-anims` na linha de comando. Os ossos
+excedentes são ignorados, e o conversor avisa quantos.
+
 ### A animação não aparece
 
 - Confira a compatibilidade: `info` no modelo e no `.frm`, e compare **angle
@@ -332,6 +377,12 @@ unitárias. Use `--keep-normals` se quiser preservar os valores originais.
 ### Aviso "N bytes extras ignorados no fim do P3M"
 
 Normal, aparece em 115 dos 131 arquivos analisados. São dados que o jogo não usa.
+
+### O arrastar e soltar não funciona
+
+Falta o pacote opcional `tkinterdnd2`. Instale com `pip install tkinterdnd2`, ou
+use os botões de adicionar, que fazem o mesmo. Os executáveis prontos já vêm com o
+recurso.
 
 ### A interface gráfica não abre
 

@@ -21,12 +21,13 @@ O pacote nao tem nenhuma dependencia fora da biblioteca padrao do Python.
 
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __all__ = [
     "__version__",
     "ConvertOptions",
     "ConvertResult",
     "Direction",
+    "AnimationIndex",
     "build_scene",
     "convert_model",
     "convert_to_gc",
@@ -45,6 +46,7 @@ __all__ = [
 ]
 
 from .convert import (
+    AnimationIndex,
     ConvertOptions,
     ConvertResult,
     Direction,

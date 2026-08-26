@@ -28,6 +28,7 @@ __all__ = [
     "ConvertOptions",
     "ConvertResult",
     "Direction",
+    "AnimationIndex",
     "GC_EXTENSIONS",
     "GLTF_EXTENSIONS",
     "classify_path",
@@ -87,6 +88,11 @@ class ConvertOptions:
     extract_texture: bool = True
     #: Prefixo dos arquivos .frm gerados.
     animation_prefix: str = ""
+
+    # ---- selecao de animacoes (apenas P3M/FRM -> GLB)
+    #: Se True, cada modelo recebe apenas as animacoes com o mesmo numero de
+    #: ossos. Se False, recebe todas as animacoes informadas.
+    match_animations_by_bones: bool = True
 
 
 @dataclass
@@ -428,25 +434,85 @@ def find_animations_for_model(model_path: str, animation_dir: str) -> list[str]:
     """
     if not os.path.isdir(animation_dir):
         return []
+    paths = [
+        os.path.join(animation_dir, name)
+        for name in sorted(os.listdir(animation_dir))
+        if name.lower().endswith(".frm")
+    ]
+    index = AnimationIndex(paths)
+    chosen, _ = index.select_for(model_path, match_by_bones=True)
+    return chosen
 
-    try:
-        p3m = p3m_format.load_p3m(model_path)
-    except (p3m_format.InvalidP3mError, OSError):
-        return []
-    num_bones = p3m.num_angle_bones
 
-    matches: list[str] = []
-    for name in sorted(os.listdir(animation_dir)):
-        if not name.lower().endswith(".frm"):
-            continue
-        path = os.path.join(animation_dir, name)
+class AnimationIndex:
+    """Agrupa arquivos `.frm` por numero de ossos, lendo cada um uma unica vez.
+
+    Existe para que converter 80 modelos com 68 animacoes disponiveis nao releia
+    os mesmos 68 arquivos 80 vezes. A GUI e a CLI usam a mesma instancia.
+    """
+
+    def __init__(self, animation_paths: list[str] | tuple[str, ...] = ()) -> None:
+        #: numero de ossos -> caminhos
+        self.by_bone_count: dict[int, list[str]] = {}
+        #: arquivos que nao puderam ser lidos, com o motivo
+        self.unreadable: list[tuple[str, str]] = []
+        self.paths: list[str] = []
+
+        for path in animation_paths:
+            try:
+                count = frm_format.load_frm(path).num_bones
+            except Exception as error:  # noqa: BLE001
+                self.unreadable.append((path, str(error)))
+                continue
+            self.by_bone_count.setdefault(count, []).append(path)
+            self.paths.append(path)
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    @property
+    def bone_counts(self) -> list[int]:
+        return sorted(self.by_bone_count)
+
+    def select_for(
+        self, model_path: str, match_by_bones: bool = True
+    ) -> tuple[list[str], list[str]]:
+        """Escolhe as animacoes para um modelo. Devolve `(escolhidas, avisos)`.
+
+        Com `match_by_bones=False`, devolve todas — util quando o usuario sabe
+        que as animacoes pertencem ao modelo apesar da contagem de ossos, ou
+        quando quer todas num unico GLB de propósito.
+
+        Quando o casamento por ossos nao encontra nada, o aviso diz **por que**,
+        listando as contagens disponiveis. Sem isso, o modelo sairia sem animacao
+        nenhuma e a causa ficaria invisivel.
+        """
+        warnings: list[str] = []
+        if not self.paths:
+            return [], warnings
+
+        if not match_by_bones:
+            return list(self.paths), warnings
+
         try:
-            frm = frm_format.load_frm(path)
-        except (frm_format.InvalidFrmError, OSError):
-            continue
-        if frm.num_bones == num_bones:
-            matches.append(path)
-    return matches
+            bones = p3m_format.load_p3m(model_path).num_angle_bones
+        except (p3m_format.InvalidP3mError, OSError) as error:
+            warnings.append(
+                f"nao foi possivel ler os ossos do modelo para casar as "
+                f"animacoes ({error}); nenhuma animacao foi incluida"
+            )
+            return [], warnings
+
+        chosen = self.by_bone_count.get(bones, [])
+        if not chosen:
+            available = ", ".join(str(count) for count in self.bone_counts)
+            warnings.append(
+                f"nenhuma das {len(self.paths)} animacao(oes) carregada(s) casa "
+                f"com este modelo: ele tem {bones} osso(s) e as animacoes tem "
+                f"{available}. Se voce sabe que elas pertencem a este modelo, "
+                f"desligue o casamento por numero de ossos."
+            )
+        return chosen, warnings
 
 
 def collect_inputs(
@@ -488,28 +554,43 @@ def convert_batch(
     output_dir: str,
     options: ConvertOptions | None = None,
     animation_dir: str | None = None,
+    animation_paths: list[str] | tuple[str, ...] = (),
     progress=None,
 ) -> list[ConvertResult]:
     """Converte varios P3M para GLB, numa pasta de saida.
+
+    As animacoes podem vir de uma pasta (`animation_dir`) ou de uma lista
+    explicita (`animation_paths`). Cada `.frm` e lido uma unica vez, mesmo com
+    centenas de modelos.
 
     `progress` e um callable opcional `(indice, total, caminho)` chamado antes de
     cada arquivo, para a interface atualizar a barra de progresso.
     """
     options = options or ConvertOptions()
+
+    paths = list(animation_paths)
+    if animation_dir and os.path.isdir(animation_dir):
+        paths.extend(
+            os.path.join(animation_dir, name)
+            for name in sorted(os.listdir(animation_dir))
+            if name.lower().endswith(".frm")
+        )
+    index = AnimationIndex(paths)
+
     results: list[ConvertResult] = []
     total = len(model_paths)
 
-    for index, model_path in enumerate(model_paths):
+    for position, model_path in enumerate(model_paths):
         if progress is not None:
-            progress(index, total, model_path)
+            progress(position, total, model_path)
         stem = os.path.splitext(os.path.basename(model_path))[0]
         output_path = os.path.join(output_dir, stem + ".glb")
-        animations = (
-            find_animations_for_model(model_path, animation_dir)
-            if animation_dir
-            else []
+        chosen, warnings = index.select_for(
+            model_path, options.match_animations_by_bones
         )
-        results.append(convert_model(model_path, output_path, animations, options))
+        result = convert_model(model_path, output_path, chosen, options)
+        result.warnings[:0] = warnings
+        results.append(result)
 
     if progress is not None:
         progress(total, total, "")

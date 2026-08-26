@@ -357,6 +357,49 @@ paleta é fixa em vez de seguir o sistema: detectar GTK ou o tema do Windows dar
 trabalho e o tkinter não acompanharia de todo jeito. Fixa, a aparência é a mesma
 nas duas plataformas.
 
+### Arrastar e soltar como dependência opcional
+
+O tkinter não tem arrastar e soltar de arquivos. O `tkinterdnd2` fornece isso
+embutindo a extensão Tcl `tkdnd`, com binários para Linux e Windows, Tcl 8 e 9.
+
+Isso colide com a regra de zero dependências, e a saída foi torná-la **opcional em
+tempo de execução e embutida no empacotamento**: o import está num `try`, e sem o
+pacote a janela funciona igual, apenas pelos botões, com um aviso no registro. Os
+executáveis gerados incluem o pacote (declarado como `datas` no `.spec`, porque são
+arquivos de extensão Tcl e não imports), então o usuário final tem o recurso
+sempre. Quem roda pelo código escolhe se quer instalar.
+
+O ponto delicado é o **parser dos caminhos soltos**. O tkdnd entrega uma lista
+Tcl, com chaves em volta dos caminhos que têm espaço:
+
+```
+{/run/media/GRAND CHASE/Lança Uno.p3m} /tmp/b.frm
+```
+
+Um `split()` quebraria justamente o caso comum, porque as pastas deste projeto têm
+espaço no nome. `_parse_drop_data` interpreta as chaves, e há sete testes cobrindo
+caminhos com espaço, mistura de com e sem chaves, caminhos do Windows e separação
+por nova linha.
+
+### Seleção de animações
+
+`AnimationIndex` lê cada `.frm` uma única vez e os agrupa por número de ossos.
+Converter 83 modelos com 68 animações disponíveis passou de 83 × 68 leituras para
+68 — e a mesma instância é usada pela linha de comando e pela janela, então as duas
+selecionam do mesmo jeito.
+
+A parte que importa não é o desempenho, e sim o **feedback**. Antes, quando o
+casamento por ossos não encontrava nada, o modelo saía sem animação e a causa ficava
+invisível: parecia que o conversor não suportava várias animações. Agora
+`select_for` devolve um aviso que diz quantos ossos o modelo tem, quantos as
+animações têm, e que a verificação pode ser desligada.
+
+A opção de desligar existe porque o critério é uma heurística, ainda que baseada no
+formato: pode haver casos legítimos em que o usuário sabe mais que a contagem de
+ossos.
+
+### Threads
+
 A conversão roda em uma thread separada, mas **essa thread nunca toca em
 widgets**. Ela empilha mensagens numa `queue.Queue`, e a thread da interface
 consome a fila a cada 80 ms em `_drain_queue`. Tkinter não é thread-safe;

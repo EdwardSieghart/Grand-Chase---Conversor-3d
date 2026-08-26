@@ -90,18 +90,23 @@ python3 gc3d_gui.py       # ou ./dist/linux/gc3d-gui  /  dist\windows\gc3d-gui.e
 
 Uma tela só, tema escuro:
 
-1. **Adicionar arquivos** ou **Adicionar pasta**. Tudo vai para a mesma lista —
-   modelos, animações e glTF juntos.
-2. A faixa azul no topo mostra o sentido detectado, por exemplo
-   `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes)`.
-3. Escolha a pasta de saída e clique em **Converter**.
+1. **Arraste arquivos ou pastas** para a janela, ou use **Adicionar arquivos** /
+   **Adicionar pasta**. Tudo vai para a mesma lista — modelos, animações e glTF
+   juntos. Pastas soltas são varridas recursivamente.
+2. A faixa azul no topo mostra o sentido detectado e o que será feito, por exemplo
+   `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes), casadas por ossos`.
+3. Em **Animações**, escolha entre incluir só as compatíveis com cada modelo
+   (padrão) ou **todas** as carregadas. Em qualquer um dos casos, todas as
+   animações incluídas vão juntas em **um único `.glb` por modelo**.
+4. Escolha a pasta de saída e clique em **Converter**.
 
 A lista é limpa ao terminar, então o próximo trabalho começa do zero sem risco de
 reconverter por engano. A conversão roda em segundo plano (a janela não congela) e
 pode ser cancelada entre arquivos.
 
-Quando o sentido é `P3M + FRM -> GLB`, cada modelo recebe apenas as animações
-compatíveis com ele — ver [associação de animações](#como-as-animações-são-associadas-aos-modelos).
+O arrastar e soltar depende do pacote opcional `tkinterdnd2`. Os executáveis
+prontos já o incluem; rodando pelo Python, instale com
+`pip install tkinterdnd2` — sem ele a janela funciona igual, só pelos botões.
 
 ### Linha de comando
 
@@ -126,6 +131,7 @@ Opções que costumam ser úteis:
 |-------|--------|
 | `--anim-dir PASTA` | inclui as animações compatíveis da pasta |
 | `-a ARQUIVO.frm` | inclui uma animação específica (pode repetir) |
+| `--all-anims` | inclui **todas** as animações, sem exigir o mesmo número de ossos |
 | `--texture-dir PASTA` | procura texturas também nesta pasta |
 | `--texture ARQUIVO` | usa uma textura específica |
 | `--no-texture` | não embute nem extrai textura |
@@ -144,8 +150,16 @@ usa o único critério confiável disponível: **um FRM só pode animar um model
 o mesmo número de ossos**. É uma restrição do próprio formato, não um palpite.
 
 Funciona bem porque os personagens do Grand Chase usam poucos esqueletos
-distintos (15 e 23 ossos nos arquivos analisados). Se quiser controle total,
-indique os `.frm` um por um com `-a`.
+distintos (15 e 23 ossos nos arquivos analisados).
+
+Quando nenhuma animação casa, o programa **diz por quê** — quantos ossos o modelo
+tem, quantos as animações têm, e que a verificação pode ser desligada. Antes isso
+era silencioso, e parecia que o conversor não suportava várias animações.
+
+Para forçar, use `--all-anims` na linha de comando ou a segunda opção do painel
+**Animações** na janela. Aí todas as animações carregadas entram em cada modelo,
+num único `.glb`. Já foi testado com 68 animações e 4.081 keyframes num arquivo
+só.
 
 ---
 
@@ -191,7 +205,8 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │       ├── frm.py         Animações: lê e escreve
 │       ├── glb.py         Escreve glTF 2.0 binário
 │       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
-├── tests/                 130 testes, só com a biblioteca padrão
+├── requirements-optional.txt  Dependências opcionais (drag and drop, build)
+├── tests/                 147 testes, só com a biblioteca padrão
 ├── tools/
 │   ├── glb_inspect.py     Inspeciona, valida e compara GLB
 │   ├── validate_all.py    Validação em massa da direção direta
@@ -220,7 +235,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 python3 -m unittest discover -s tests -t .
 ```
 
-130 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
+147 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
 # direção direta: lê tudo e confere os GLB gerados

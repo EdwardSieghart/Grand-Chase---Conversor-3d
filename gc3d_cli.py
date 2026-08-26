@@ -93,6 +93,7 @@ def _options_from_args(args: argparse.Namespace) -> ConvertOptions:
         pretty_json=args.pretty_json,
         export_animations=not args.no_animations,
         extract_texture=not args.no_texture,
+        match_animations_by_bones=not args.all_anims,
     )
 
 
@@ -142,12 +143,28 @@ def cmd_convert(args: argparse.Namespace) -> int:
         return 2
 
     model = models[0] if models else None
+    options = _options_from_args(args)
 
     if args.anim_dir and model:
-        found = find_animations_for_model(model, args.anim_dir)
+        from gc3d import AnimationIndex
+
+        paths = [
+            os.path.join(args.anim_dir, name)
+            for name in sorted(os.listdir(args.anim_dir))
+            if name.lower().endswith(".frm")
+        ] if os.path.isdir(args.anim_dir) else []
+        index = AnimationIndex(paths)
+        chosen, selection_warnings = index.select_for(
+            model, options.match_animations_by_bones
+        )
         if not args.quiet:
-            print(f"{len(found)} animacao(oes) compativel(is) em {args.anim_dir}")
-        animations.extend(a for a in found if a not in animations)
+            print(
+                f"{len(chosen)} de {len(index)} animacao(oes) de {args.anim_dir} "
+                f"serao incluidas"
+            )
+        for warning in selection_warnings:
+            print(f"aviso: {warning}", file=sys.stderr)
+        animations.extend(a for a in chosen if a not in animations)
 
     stem = os.path.splitext(os.path.basename(model or animations[0]))[0]
     if args.output and args.output.lower().endswith(".glb"):
@@ -155,7 +172,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     else:
         output_path = os.path.join(args.output or ".", stem + ".glb")
 
-    result = convert_model(model, output_path, animations, _options_from_args(args))
+    result = convert_model(model, output_path, animations, options)
     _print_result(result, args.verbose, args.quiet)
     return 0 if result.ok else 1
 
@@ -187,6 +204,26 @@ def cmd_batch(args: argparse.Namespace) -> int:
         )
 
     results: list[ConvertResult] = []
+    animation_index = None
+    if direction == Direction.TO_GLTF and args.anim_dir:
+        from gc3d import AnimationIndex
+
+        paths = (
+            [
+                os.path.join(args.anim_dir, name)
+                for name in sorted(os.listdir(args.anim_dir))
+                if name.lower().endswith(".frm")
+            ]
+            if os.path.isdir(args.anim_dir)
+            else []
+        )
+        animation_index = AnimationIndex(paths)
+        if not args.quiet:
+            print(
+                f"{len(animation_index)} animacao(oes) em {args.anim_dir}, "
+                f"com {', '.join(str(c) for c in animation_index.bone_counts)} osso(s)"
+            )
+
     for index, path in enumerate(inputs):
         if not args.quiet:
             print(f"[{index + 1}/{len(inputs)}] {os.path.basename(path)}", flush=True)
@@ -194,19 +231,20 @@ def cmd_batch(args: argparse.Namespace) -> int:
             results.append(convert_to_gc(path, args.output, options))
         else:
             stem = os.path.splitext(os.path.basename(path))[0]
-            animations = (
-                find_animations_for_model(path, args.anim_dir)
-                if args.anim_dir
-                else []
-            )
-            results.append(
-                convert_model(
-                    path,
-                    os.path.join(args.output, stem + ".glb"),
-                    animations,
-                    options,
+            animations: list[str] = []
+            selection_warnings: list[str] = []
+            if animation_index is not None:
+                animations, selection_warnings = animation_index.select_for(
+                    path, options.match_animations_by_bones
                 )
+            result = convert_model(
+                path,
+                os.path.join(args.output, stem + ".glb"),
+                animations,
+                options,
             )
+            result.warnings[:0] = selection_warnings
+            results.append(result)
 
     failures = [r for r in results if not r.ok]
     if not args.quiet:
@@ -384,6 +422,14 @@ def build_parser() -> argparse.ArgumentParser:
             "--no-animations",
             action="store_true",
             help="ao converter glTF de volta, nao gravar os arquivos .frm",
+        )
+        sub.add_argument(
+            "--all-anims",
+            action="store_true",
+            help=(
+                "inclui todas as animacoes em cada modelo, sem exigir o mesmo "
+                "numero de ossos (o padrao e casar por ossos)"
+            ),
         )
         sub.add_argument("-v", "--verbose", action="store_true", help="mais detalhes")
         sub.add_argument("-q", "--quiet", action="store_true", help="menos saida")

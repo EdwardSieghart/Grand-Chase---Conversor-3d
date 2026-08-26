@@ -1,0 +1,22 @@
+# Dependencias OPCIONAIS do Grand Chase 3D Importer.
+#
+# O programa funciona sem nenhuma delas. Instale apenas o que quiser usar:
+#
+#     python3 -m pip install -r requirements-optional.txt
+#
+# Os executaveis gerados por build/linux/build.sh e build/windows/build.bat ja
+# incluem o tkinterdnd2, entao o usuario final nao precisa instalar nada.
+
+# Arrastar e soltar arquivos na interface grafica.
+# Sem isso, a janela funciona igual, apenas com os botoes de adicionar.
+# Traz binarios da extensao Tcl "tkdnd" para Linux e Windows, Tcl 8 e 9.
+tkinterdnd2==0.6.2
+
+# Empacotamento em executavel unico. Necessario apenas para gerar binarios.
+pyinstaller>=6.0
+
+# Usados APENAS pelos scripts de validacao em tools/, como implementacao de
+# referencia independente para conferir o decodificador de DDS
+# (tools/validate_all.py --cross-check). Nao sao usados pelo conversor.
+Pillow>=10.0
+numpy>=1.24

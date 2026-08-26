@@ -49,6 +49,25 @@ EXCLUDES = [
 # "Failed to load Python shared library". Dois Analysis independentes custam
 # alguns megabytes a mais e cada binario roda por conta propria.
 
+# O arrastar e soltar depende do tkinterdnd2, que carrega uma extensao Tcl a
+# partir de arquivos em disco. O PyInstaller nao descobre esses arquivos sozinho,
+# porque nao sao imports: e preciso declara-los como `datas`. Se o pacote nao
+# estiver instalado, o build segue sem o recurso — a interface detecta a ausencia
+# em tempo de execucao e continua funcionando pelos botoes.
+GUI_DATAS = []
+GUI_HIDDEN = ["gc3d", "gc3d.formats"]
+try:
+    from PyInstaller.utils.hooks import collect_data_files  # noqa: F821
+
+    GUI_DATAS = collect_data_files("tkinterdnd2")
+    if GUI_DATAS:
+        GUI_HIDDEN.append("tkinterdnd2")
+        print(f"[gc3d.spec] tkinterdnd2 incluido ({len(GUI_DATAS)} arquivos)")
+    else:
+        print("[gc3d.spec] tkinterdnd2 nao encontrado: sem arrastar e soltar")
+except Exception as error:  # noqa: BLE001
+    print(f"[gc3d.spec] tkinterdnd2 nao incluido: {error}")
+
 cli_analysis = Analysis(  # noqa: F821
     [os.path.join(PROJECT_ROOT, "gc3d_cli.py")],
     pathex=[SRC],
@@ -63,8 +82,8 @@ gui_analysis = Analysis(  # noqa: F821
     [os.path.join(PROJECT_ROOT, "gc3d_gui.py")],
     pathex=[SRC],
     binaries=[],
-    datas=[],
-    hiddenimports=["gc3d", "gc3d.formats"],
+    datas=GUI_DATAS,
+    hiddenimports=GUI_HIDDEN,
     excludes=EXCLUDES,
     noarchive=False,
 )

@@ -39,6 +39,7 @@ if os.path.isdir(_SRC) and _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from gc3d import (  # noqa: E402
+    AnimationIndex,
     ConvertOptions,
     Direction,
     __version__,
@@ -47,6 +48,20 @@ from gc3d import (  # noqa: E402
     convert_model,
     convert_to_gc,
 )
+
+# Arrastar e soltar arquivos nao existe no tkinter. O tkinterdnd2 fornece isso
+# embutindo a extensao Tcl "tkdnd", com binarios para Linux e Windows. E uma
+# dependencia OPCIONAL: sem ela a janela funciona igual, apenas sem o recurso.
+# Os executaveis empacotados a incluem, entao para o usuario final o recurso vem
+# sempre ligado.
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+
+    DND_AVAILABLE = True
+except Exception:  # noqa: BLE001 - qualquer falha de carga desativa o recurso
+    DND_FILES = None  # type: ignore[assignment]
+    TkinterDnD = None  # type: ignore[assignment]
+    DND_AVAILABLE = False
 
 APP_TITLE = f"Grand Chase 3D Importer {__version__}"
 
@@ -231,21 +246,26 @@ class ConverterApp(ttk.Frame):
         self.status = tk.StringVar(value="Pronto.")
         self.progress_value = tk.DoubleVar(value=0.0)
         self.with_texture = tk.BooleanVar(value=True)
+        #: Casar animacoes por numero de ossos. Desligado, todas vao em todos.
+        self.match_by_bones = tk.BooleanVar(value=True)
 
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
 
         self._build_ui()
-        self._refresh_direction()
+        # Chama _refresh_list (nao _refresh_direction) para que a dica de lista
+        # vazia seja posicionada ja na abertura.
+        self._refresh_list()
         self.after(80, self._drain_queue)
 
     # ------------------------------------------------------------------- UI
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
+        # A lista e o registro sao os unicos que crescem com a janela.
         self.rowconfigure(2, weight=3)
-        self.rowconfigure(5, weight=2)
+        self.rowconfigure(6, weight=2)
 
         # ---- cabecalho
         header = ttk.Frame(self)
@@ -295,6 +315,21 @@ class ConverterApp(ttk.Frame):
         list_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
         self.file_list.configure(yscrollcommand=list_scroll.set)
 
+        # Texto de fundo mostrado quando a lista esta vazia. E aqui que o usuario
+        # descobre que pode arrastar arquivos.
+        self.empty_hint = tk.Label(
+            self.file_list,
+            text=(
+                "Arraste arquivos ou pastas para cá"
+                if DND_AVAILABLE
+                else "Use os botões abaixo para adicionar arquivos"
+            ),
+            bg=Dark.SURFACE,
+            fg=Dark.FG_MUTED,
+            font=("TkDefaultFont", 10),
+        )
+        self._register_drop_target()
+
         # ---- botoes da lista
         buttons = ttk.Frame(self)
         buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -330,9 +365,36 @@ class ConverterApp(ttk.Frame):
             variable=self.with_texture,
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
+        # ---- animacoes
+        self.animation_frame = ttk.LabelFrame(
+            self, text="Animações (ao gerar .glb)", padding=10
+        )
+        self.animation_frame.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        self.animation_frame.columnconfigure(0, weight=1)
+        ttk.Radiobutton(
+            self.animation_frame,
+            text="Incluir só as animações compatíveis com cada modelo "
+            "(mesmo número de ossos)",
+            variable=self.match_by_bones,
+            value=True,
+            command=self._refresh_direction,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(
+            self.animation_frame,
+            text="Incluir todas as animações carregadas em cada modelo",
+            variable=self.match_by_bones,
+            value=False,
+            command=self._refresh_direction,
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(
+            self.animation_frame,
+            text="Todas as animações incluídas vão juntas em um único .glb por modelo.",
+            style="Muted.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
+
         # ---- registro
         log_frame = ttk.LabelFrame(self, text="Registro", padding=(2, 6, 2, 2))
-        log_frame.grid(row=5, column=0, sticky="nsew", pady=(12, 0))
+        log_frame.grid(row=6, column=0, sticky="nsew", pady=(12, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -364,7 +426,7 @@ class ConverterApp(ttk.Frame):
 
         # ---- rodape
         footer = ttk.Frame(self)
-        footer.grid(row=6, column=0, sticky="ew", pady=(12, 0))
+        footer.grid(row=7, column=0, sticky="ew", pady=(12, 0))
         footer.columnconfigure(2, weight=1)
 
         self.convert_button = ttk.Button(
@@ -385,6 +447,93 @@ class ConverterApp(ttk.Frame):
             footer, variable=self.progress_value, maximum=100.0
         )
         self.progress.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+
+    # ------------------------------------------------------ arrastar e soltar
+
+    def _register_drop_target(self) -> None:
+        """Liga o arrastar e soltar, se o tkinterdnd2 estiver disponivel."""
+        if not DND_AVAILABLE:
+            return
+        for widget in (self.file_list, self):
+            try:
+                widget.drop_target_register(DND_FILES)
+                widget.dnd_bind("<<Drop>>", self._on_drop)
+                widget.dnd_bind("<<DropEnter>>", self._on_drop_enter)
+                widget.dnd_bind("<<DropLeave>>", self._on_drop_leave)
+            except Exception:  # noqa: BLE001 - widget sem suporte, ignora
+                continue
+
+    def _on_drop_enter(self, event):  # noqa: ANN001, ARG002
+        """Realca a lista enquanto o arquivo esta sobre a janela."""
+        self.file_list.configure(bg=Dark.SURFACE_HI)
+        self.empty_hint.configure(bg=Dark.SURFACE_HI)
+        return event.action if hasattr(event, "action") else None
+
+    def _on_drop_leave(self, event):  # noqa: ANN001, ARG002
+        self.file_list.configure(bg=Dark.SURFACE)
+        self.empty_hint.configure(bg=Dark.SURFACE)
+        return None
+
+    def _on_drop(self, event):  # noqa: ANN001
+        """Recebe os caminhos soltos na janela."""
+        self._on_drop_leave(event)
+        paths = self._parse_drop_data(getattr(event, "data", "") or "")
+        if not paths:
+            return None
+
+        # Pastas soltas sao expandidas recursivamente, igual ao botao
+        # "Adicionar pasta".
+        expanded: list[str] = []
+        folders = 0
+        for path in paths:
+            if os.path.isdir(path):
+                folders += 1
+                models, animations, gltfs = collect_inputs([path], recursive=True)
+                expanded.extend(models + animations + gltfs)
+            elif os.path.isfile(path):
+                expanded.append(path)
+        if folders:
+            self._log(f"{folders} pasta(s) solta(s), varrida(s) recursivamente.", "muted")
+        self._add_paths(expanded)
+        return None
+
+    @staticmethod
+    def _parse_drop_data(data: str) -> list[str]:
+        """Separa a lista de caminhos que o tkdnd entrega como string Tcl.
+
+        O formato e uma lista Tcl: caminhos sem espaco vem soltos, e caminhos com
+        espaco vem entre chaves — `{/home/eu/Grand Chase/a.p3m} /tmp/b.frm`.
+        Um `split()` simples quebraria justamente os caminhos com espaco, que sao
+        a regra nas pastas deste projeto.
+        """
+        paths: list[str] = []
+        current = ""
+        depth = 0
+        for char in data:
+            if char == "{":
+                if depth == 0 and current.strip():
+                    paths.append(current.strip())
+                    current = ""
+                depth += 1
+                if depth == 1:
+                    continue
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    paths.append(current)
+                    current = ""
+                    continue
+            if depth > 0:
+                current += char
+            elif char.isspace():
+                if current.strip():
+                    paths.append(current.strip())
+                current = ""
+            else:
+                current += char
+        if current.strip():
+            paths.append(current.strip())
+        return [p for p in (path.strip() for path in paths) if p]
 
     # ------------------------------------------------------- direcao e lista
 
@@ -424,9 +573,14 @@ class ConverterApp(ttk.Frame):
             )
         else:
             if models:
+                if animations and not self.match_by_bones.get():
+                    modo = f"todas as {animations} em cada modelo"
+                elif animations:
+                    modo = f"{animations} animacao(oes), casadas por ossos"
+                else:
+                    modo = "sem animacoes"
                 self.direction_text.set(
-                    f"P3M + FRM -> GLB     {models} modelo(s), "
-                    f"{animations} animacao(oes)"
+                    f"P3M + FRM -> GLB     {models} modelo(s), {modo}"
                 )
             else:
                 self.direction_text.set(
@@ -442,6 +596,11 @@ class ConverterApp(ttk.Frame):
             self.file_list.insert(
                 "end", f"  {labels.get(kind, 'outro    ')}  {os.path.basename(path)}"
             )
+        # A dica de fundo aparece so com a lista vazia.
+        if self.paths:
+            self.empty_hint.place_forget()
+        else:
+            self.empty_hint.place(relx=0.5, rely=0.5, anchor="center")
         self._refresh_direction()
 
     def _add_paths(self, paths: list[str]) -> None:
@@ -569,6 +728,7 @@ class ConverterApp(ttk.Frame):
         options = ConvertOptions(
             embed_texture=self.with_texture.get(),
             extract_texture=self.with_texture.get(),
+            match_animations_by_bones=self.match_by_bones.get(),
             texture_dirs=sorted(
                 {os.path.dirname(os.path.abspath(p)) for p in self.paths}
             ),
@@ -604,59 +764,54 @@ class ConverterApp(ttk.Frame):
         options: ConvertOptions,
     ) -> None:
         """Roda na thread de trabalho. Comunica-se apenas pela fila."""
-        if direction == Direction.TO_GC:
-            items = gltfs
-        else:
-            items = models
-
+        items = gltfs if direction == Direction.TO_GC else models
         total = len(items)
         succeeded = 0
 
-        # Agrupa as animacoes por numero de ossos uma unica vez, para nao
-        # reabrir os mesmos FRM a cada modelo.
-        by_bone_count: dict[int, list[str]] = {}
-        if direction == Direction.TO_GLTF and animations:
-            from gc3d.formats import frm as frm_format
-
-            for path in animations:
-                try:
-                    count = frm_format.load_frm(path).num_bones
-                except Exception:  # noqa: BLE001 - arquivo ruim so e ignorado
-                    self._queue.put(
+        # Le cada .frm uma unica vez, mesmo com centenas de modelos.
+        index = AnimationIndex(animations) if direction == Direction.TO_GLTF else None
+        if index is not None:
+            for path, reason in index.unreadable:
+                self._queue.put(
+                    (
+                        "log",
                         (
-                            "log",
-                            (
-                                f"     ignorando {os.path.basename(path)}: "
-                                f"nao foi possivel ler",
-                                "aviso",
-                            ),
-                        )
+                            f"     ignorando {os.path.basename(path)}: {reason}",
+                            "aviso",
+                        ),
                     )
-                    continue
-                by_bone_count.setdefault(count, []).append(path)
+                )
+            if len(index):
+                self._queue.put(
+                    (
+                        "log",
+                        (
+                            f"     {len(index)} animacao(oes) disponivel(is), "
+                            f"com {', '.join(str(c) for c in index.bone_counts)} osso(s)",
+                            "muted",
+                        ),
+                    )
+                )
 
-        for index, path in enumerate(items):
+        for position, path in enumerate(items):
             if self._cancel.is_set():
                 self._queue.put(("status", "Cancelado."))
                 break
 
-            self._queue.put(("progress", (index / total) * 100.0))
+            self._queue.put(("progress", (position / total) * 100.0))
             self._queue.put(
-                ("status", f"[{index + 1}/{total}] {os.path.basename(path)}")
+                ("status", f"[{position + 1}/{total}] {os.path.basename(path)}")
             )
 
+            extra_warnings: list[str] = []
             if direction == Direction.TO_GC:
                 result = convert_to_gc(path, output_dir, options)
             else:
                 chosen: list[str] = []
-                if animations:
-                    try:
-                        from gc3d.formats import p3m as p3m_format
-
-                        bones = p3m_format.load_p3m(path).num_angle_bones
-                        chosen = by_bone_count.get(bones, [])
-                    except Exception:  # noqa: BLE001
-                        chosen = []
+                if index is not None and len(index):
+                    chosen, extra_warnings = index.select_for(
+                        path, options.match_animations_by_bones
+                    )
                 stem = os.path.splitext(os.path.basename(path))[0]
                 result = convert_model(
                     path, os.path.join(output_dir, stem + ".glb"), chosen, options
@@ -670,16 +825,10 @@ class ConverterApp(ttk.Frame):
                 if len(result.outputs) > 3:
                     produced += f" (+{len(result.outputs) - 3})"
                 self._queue.put(
-                    (
-                        "log",
-                        (
-                            f"[ok] {os.path.basename(path)} -> {produced}",
-                            "ok",
-                        ),
-                    )
+                    ("log", (f"[ok] {os.path.basename(path)} -> {produced}", "ok"))
                 )
                 self._queue.put(("log", (f"     {result.summary}", "muted")))
-                for warning in result.warnings:
+                for warning in extra_warnings + result.warnings:
                     self._queue.put(("log", (f"     aviso: {warning}", "aviso")))
             else:
                 self._queue.put(
@@ -724,9 +873,25 @@ class ConverterApp(ttk.Frame):
 
 
 def main() -> int:
-    root = tk.Tk()
+    # A raiz precisa ser a do TkinterDnD para o arrastar e soltar funcionar; ela
+    # e uma subclasse de tk.Tk que carrega a extensao Tcl. Sem o pacote, cai na
+    # raiz normal e a janela funciona igual, so sem o recurso.
+    if DND_AVAILABLE:
+        try:
+            root = TkinterDnD.Tk()
+        except Exception:  # noqa: BLE001 - extensao presente mas sem carregar
+            root = tk.Tk()
+    else:
+        root = tk.Tk()
+
     apply_dark_theme(root)
-    ConverterApp(root)
+    app = ConverterApp(root)
+    if not DND_AVAILABLE:
+        app._log(
+            "Arrastar e soltar indisponivel: instale com "
+            "'pip install tkinterdnd2'. Os botoes de adicionar funcionam normalmente.",
+            "muted",
+        )
     root.mainloop()
     return 0
 
