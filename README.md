@@ -221,6 +221,36 @@ Detalhes e metodologia em [docs/VALIDACAO.md](docs/VALIDACAO.md).
 
 ---
 
+## Versionamento
+
+O projeto é um repositório git. Para publicar no GitHub pela primeira vez:
+
+```bash
+# com token pessoal (cria o repositório automaticamente)
+read -rs GITHUB_TOKEN && export GITHUB_TOKEN
+./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer
+
+# ou com chave SSH, criando antes o repositório vazio em github.com/new
+./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --ssh
+```
+
+Rode `./tools/publicar_github.sh` sem argumentos para ver as instruções
+completas, incluindo como gerar o token e a chave.
+
+Depois disso, salvar uma nova versão é o fluxo normal:
+
+```bash
+git add -A
+git commit -m "descrição da mudança"
+git push
+
+# marcando uma versão
+git tag -a v1.1.0 -m "descrição"
+git push --tags
+```
+
+---
+
 ## Créditos
 
 - Formato e algoritmo de conversão levantados a partir do
