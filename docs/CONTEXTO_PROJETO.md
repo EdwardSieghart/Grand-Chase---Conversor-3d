@@ -4,7 +4,7 @@ Arquivo de contexto para quem for continuar este trabalho — pessoa ou assisten
 de IA. Reúne o estado atual, as decisões já tomadas (com o motivo), o que foi
 verificado e onde estão as fontes, para não ser necessário refazer a investigação.
 
-Versão 1.4.0. Última atualização: 2026-08-26.
+Versão 1.4.0. **Atenção: o disco foi remontado de `/run/media/eduardo/Arquivos` para `/mnt/Arquivos`.** Última atualização: 2026-08-26.
 
 ---
 
@@ -50,7 +50,9 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | Vários modelos num só GLB | suportado, com uma `skin` por esqueleto; `--merge` na CLI, padrão na GUI |
 | Textura por malha | suportado; um material por malha no GLB |
 | Detecção de textura | 127/127 modelos; 4 estratégias, com aviso quando é aproximação |
-| Testes | 194, só com a biblioteca padrão |
+| Testes | 205, só com a biblioteca padrão |
+| Pacotes por sistema | `build/empacotar.py` monta `release/GrandChase3D-{Linux,Windows}` |
+| Publicação | `tools/publicar_github.sh`, com `--release` para anexar os .zip |
 | Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
 | Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
 | Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
@@ -97,7 +99,7 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 ### Fora do projeto (na máquina onde foi desenvolvido)
 
 ```
-/run/media/eduardo/Arquivos/GC Engine - EDU NEW CHAR STUDIO/
+/mnt/Arquivos/GC Engine - EDU NEW CHAR STUDIO/
 ├── conversor antigo/Chaseconv-master/src/     conversor antigo, em Rust
 │   ├── format/p3m/internal.rs                 layout P3M v0.5 (limpo e correto)
 │   ├── format/p3m/exporter.rs                 escrita de P3M (base da nossa)
@@ -110,7 +112,7 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 └── GC Engine - EDU NEW CHAR STUDIO/CharacterStudio/
     └── FORMATOS_P3M_FRM_CHARACTERSTUDIO.md    spec de partida (1240 linhas)
 
-/run/media/eduardo/Arquivos/GRAND CHASE/       dados de teste
+/mnt/Arquivos/GRAND CHASE/       dados de teste
 ├── Models/     83 .p3m + .dds
 ├── Face/       .p3m de rostos
 ├── ANIMAÇÔES/  68 .frm
@@ -253,6 +255,9 @@ errada e o personagem anima ao contrário. Há um teste específico
 | `has_alpha` decidido pelos pixels, não pelo formato | nenhuma das 406 texturas do jogo tem transparência real; usar o formato faria toda textura opaca virar 32 bits |
 | Sem mipmaps no DDS escrito | 326 das 406 texturas originais também não têm |
 | Fallback de textura por prefixo, com aviso | os rostos têm uma textura por expressão e nem sempre a `_00`; pegar uma é melhor que nada, desde que avisado |
+| Lançadores funcionam com ou sem binário | a mesma pasta serve para quem baixou o pacote e para quem só tem o código |
+| `release/` fora do git, pacotes via GitHub Release | binário commitado fica no histórico para sempre; cada rebuild somaria outros 26 MB |
+| Detecção de Python em camadas no `.bat` | `where` não existe em todo ambiente (o cmd do Wine não tem); há plano B chamando o interpretador direto |
 
 ---
 
@@ -327,6 +332,13 @@ De ferramental:
     no caminho lento quando diferem.
 28. **No modo `batch` os avisos dos arquivos bem-sucedidos não apareciam.** Só as
     falhas eram impressas; agora `-v` mostra todos.
+29. **`where` não existe no cmd do Wine** (errorlevel 9009). O lançador `.bat`
+    precisou de detecção em camadas: `where` primeiro, chamada direta como reserva.
+30. **`pkill -f <padrão>` mata o próprio shell** quando o padrão aparece na linha
+    de comando em execução. Para testar GUI, use `timeout` ou `pgrep -x`.
+31. **O disco pode ser remontado em outro caminho.** Era
+    `/run/media/eduardo/Arquivos`, virou `/mnt/Arquivos`. As ferramentas recebem
+    caminhos por argumento, então nada no código quebrou.
 
 ---
 

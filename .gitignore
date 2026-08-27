@@ -2,6 +2,14 @@
 /out/
 /dist/
 
+# Pacotes montados por build/empacotar.py.
+# Ficam fora do git de proposito: um executavel de 26 MB commitado fica no
+# historico para sempre, e cada recompilacao somaria outros 26 MB ao clone.
+# Eles vao para o GitHub como arquivos de uma Release:
+#     python3 build/empacotar.py --zip
+#     ./tools/publicar_github.sh USUARIO REPO --release
+/release/
+
 # Artefatos do PyInstaller (os .spec e scripts sao versionados; o resto nao)
 /build/*/pyinstaller/
 *.manifest

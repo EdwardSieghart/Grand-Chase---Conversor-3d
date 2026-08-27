@@ -55,9 +55,35 @@ python3 gc3d_cli.py --help   # linha de comando
 No Windows, use `python` em vez de `python3`. Ao instalar o Python, deixe marcado
 **"tcl/tk and IDLE"** (vem marcado por padrão) — é o que fornece a interface.
 
-### Executáveis prontos
+### Pacotes prontos, uma pasta por sistema
 
-Cada plataforma tem sua pasta, e a saída não se mistura:
+```bash
+python3 build/empacotar.py --zip
+```
+
+Monta duas pastas autocontidas em `release/`:
+
+```
+release/
+├── GrandChase3D-Linux/
+│   ├── Converter.sh            abre a interface
+│   ├── Linha de comando.sh     abre um terminal com o comando gc3d
+│   ├── LEIA-ME.txt
+│   ├── gc3d, gc3d-gui          executáveis, se tiverem sido compilados
+│   ├── app/                    código Python (usado se não houver executável)
+│   └── exemplos/               arquivos do jogo para testar na hora
+└── GrandChase3D-Windows/
+    ├── Converter.bat
+    ├── Linha de comando.bat
+    └── ... o mesmo, com gc3d.exe e gc3d-gui.exe
+```
+
+Os lançadores funcionam **com ou sem** executável compilado: se o binário está na
+pasta, é ele que roda; se não, o script chama o Python sobre o código em `app/`.
+Assim a pasta serve tanto para quem baixou o pacote pronto quanto para quem só
+tem o código.
+
+### Compilando os executáveis
 
 ```bash
 # Linux  ->  dist/linux/
@@ -71,7 +97,8 @@ build\windows\build.bat
 ```
 
 Precisa do PyInstaller (`pip install pyinstaller`) apenas para gerar; os binários
-resultantes não dependem de nada instalado.
+resultantes não dependem de nada instalado. Depois de compilar, rode
+`build/empacotar.py` de novo para que os pacotes incluam os executáveis.
 
 O PyInstaller não faz cross-compile — ele empacota o interpretador da plataforma
 onde roda. O script `build_wine.sh` resolve isso rodando o PyInstaller **dentro
@@ -223,7 +250,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │       ├── glb.py         Escreve glTF 2.0 binário
 │       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
 ├── requirements-optional.txt  Dependências opcionais (drag and drop, build)
-├── tests/                 194 testes, só com a biblioteca padrão
+├── tests/                 205 testes, só com a biblioteca padrão
 ├── tools/
 │   ├── glb_inspect.py     Inspeciona, valida e compara GLB
 │   ├── validate_all.py    Validação em massa da direção direta
@@ -252,7 +279,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 python3 -m unittest discover -s tests -t .
 ```
 
-194 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
+205 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
 # direção direta: lê tudo e confere os GLB gerados
@@ -301,22 +328,36 @@ Detalhes, metodologia e os bugs que a validação encontrou em
 
 ---
 
-## Versionamento
+## Publicando no GitHub
+
+O e-mail da conta **não é suficiente** — o GitHub desativou autenticação por senha
+em 2021, e o e-mail só serve para assinar os commits. Você precisa de um **token
+pessoal** (`github.com/settings/tokens`, escopo `repo`) ou de uma **chave SSH**
+(`github.com/settings/keys`).
 
 ```bash
-# primeira publicação
+# com token: cria o repositório e envia o código
 read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 ./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer
+
+# anexa os pacotes prontos como Release
+python3 build/empacotar.py --zip
+./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --release
 
 # ou com chave SSH, criando antes o repositório vazio em github.com/new
 ./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --ssh
 ```
 
-Depois disso, o fluxo normal:
+Os pacotes vão como arquivos de uma **Release**, não como commits, e `release/`
+está no `.gitignore`. Isso é deliberado: um executável de 26 MB commitado fica no
+histórico do git para sempre, e cada recompilação somaria outros 26 MB ao tamanho
+do clone. Numa Release o arquivo pode ser substituído e não pesa em quem clona.
+
+Depois da primeira vez, o fluxo normal:
 
 ```bash
 git add -A && git commit -m "descrição" && git push
-git tag -a v1.2.0 -m "descrição" && git push --tags
+git tag -a v1.5.0 -m "descrição" && git push --tags
 ```
 
 ---
