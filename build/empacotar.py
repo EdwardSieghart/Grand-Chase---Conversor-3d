@@ -234,7 +234,19 @@ cmd /k
 # --------------------------------------------------------------------- LEIA-ME
 
 
-def readme_text(platform: str, has_binary: bool) -> str:
+def readme_text(platform: str, binaries: set[str]) -> str:
+    """Texto do LEIA-ME.
+
+    `binaries` sao os nomes dos executaveis presentes na pasta. O texto muda
+    conforme o que existe de verdade: dizer "nao precisa de Python" quando so o
+    executavel de linha de comando foi compilado seria mentira, e o usuario
+    descobriria do jeito ruim, clicando no lancador da interface.
+    """
+    gui_binary = "gc3d-gui.exe" if platform == "windows" else "gc3d-gui"
+    cli_binary = "gc3d.exe" if platform == "windows" else "gc3d"
+    has_gui = gui_binary in binaries
+    has_cli = cli_binary in binaries
+
     if platform == "linux":
         abrir = "Converter.sh"
         terminal = "Linha de comando.sh"
@@ -243,15 +255,8 @@ def readme_text(platform: str, has_binary: bool) -> str:
             "    sudo apt install python3 python3-tk          # Debian, Ubuntu\n"
             "    sudo pacman -S python tk                     # Arch"
         )
-        nota_binario = (
-            "Esta pasta inclui os executaveis 'gc3d-gui' e 'gc3d', que nao\n"
-            "precisam de Python instalado."
-            if has_binary
-            else "Esta pasta NAO inclui executaveis compilados: os lancadores usam\n"
-            "o Python sobre o codigo em app/. Precisa do Python 3.10 ou mais novo."
-        )
         primeiro_passo = (
-            "1. Marque o Converter.sh como executavel, se ainda nao estiver:\n"
+            "1. Marque os lancadores como executaveis, se ainda nao estiverem:\n"
             "\n"
             "       chmod +x Converter.sh \"Linha de comando.sh\"\n"
             "\n"
@@ -266,14 +271,33 @@ def readme_text(platform: str, has_binary: bool) -> str:
             "        [x] Add Python to PATH\n"
             "        [x] tcl/tk and IDLE     (necessario para a interface)"
         )
-        nota_binario = (
-            "Esta pasta inclui os executaveis 'gc3d-gui.exe' e 'gc3d.exe', que\n"
-            "nao precisam de Python instalado."
-            if has_binary
-            else "Esta pasta NAO inclui executaveis compilados: os lancadores usam\n"
-            "o Python sobre o codigo em app\\. Precisa do Python 3.10 ou mais novo."
-        )
         primeiro_passo = f"1. Clique duas vezes em {abrir}."
+
+    if has_gui and has_cli:
+        nota_binario = (
+            f"Esta pasta inclui os executaveis '{gui_binary}' e '{cli_binary}'.\n"
+            f"NAO e preciso ter Python instalado."
+        )
+    elif has_cli:
+        nota_binario = (
+            f"Esta pasta inclui o executavel '{cli_binary}', da linha de comando,\n"
+            f"que funciona sem Python instalado.\n"
+            f"\n"
+            f"A INTERFACE GRAFICA precisa do Python, porque o executavel dela nao\n"
+            f"foi compilado para este pacote. O {abrir} detecta isso sozinho e usa\n"
+            f"o Python; veja mais abaixo como instalar, se ainda nao tiver."
+        )
+    elif has_gui:
+        nota_binario = (
+            f"Esta pasta inclui o executavel '{gui_binary}' da interface, que\n"
+            f"funciona sem Python instalado. A linha de comando usa o Python."
+        )
+    else:
+        nota_binario = (
+            "Esta pasta NAO inclui executaveis compilados: os lancadores usam o\n"
+            "Python sobre o codigo em app/. Precisa do Python 3.10 ou mais novo,\n"
+            "e nada alem disso -- o programa nao tem dependencias."
+        )
 
     return f"""Grand Chase 3D Importer {VERSION}
 {'=' * (len(VERSION) + 25)}
@@ -443,12 +467,12 @@ def copy_samples(target: str) -> int:
     return copied
 
 
-def copy_binaries(target: str, platform: str) -> bool:
-    """Copia os executaveis compilados, se existirem. Devolve se achou algum."""
+def copy_binaries(target: str, platform: str) -> set[str]:
+    """Copia os executaveis compilados. Devolve os nomes que foram copiados."""
     source = os.path.join(PROJECT_ROOT, "dist", platform)
+    found: set[str] = set()
     if not os.path.isdir(source):
-        return False
-    found = False
+        return found
     for name in sorted(os.listdir(source)):
         path = os.path.join(source, name)
         if not os.path.isfile(path):
@@ -456,7 +480,7 @@ def copy_binaries(target: str, platform: str) -> bool:
         shutil.copy2(path, os.path.join(target, name))
         if platform == "linux":
             _make_executable(os.path.join(target, name))
-        found = True
+        found.add(name)
     return found
 
 
@@ -481,7 +505,7 @@ def build_platform(platform: str) -> str:
     shutil.rmtree(target, ignore_errors=True)
     os.makedirs(target, exist_ok=True)
 
-    has_binary = copy_binaries(target, platform)
+    binaries = copy_binaries(target, platform)
     copy_app(target)
     samples = copy_samples(target)
 
@@ -503,7 +527,7 @@ def build_platform(platform: str) -> str:
             WINDOWS_CLI_LAUNCHER.replace("VERSAO_AQUI", VERSION),
         )
 
-    write_text(os.path.join(target, "LEIA-ME.txt"), readme_text(platform, has_binary))
+    write_text(os.path.join(target, "LEIA-ME.txt"), readme_text(platform, binaries))
     license_path = os.path.join(PROJECT_ROOT, "LICENSE")
     if os.path.isfile(license_path):
         shutil.copy2(license_path, os.path.join(target, "LICENSE"))
@@ -513,12 +537,12 @@ def build_platform(platform: str) -> str:
         for root, _, files in os.walk(target)
         for name in files
     )
+    executaveis = ", ".join(sorted(binaries)) if binaries else "nenhum"
     print(
         f"  {label:8s} -> {os.path.relpath(target, PROJECT_ROOT)}"
-        f"  ({size / (1024 * 1024):.1f} MB, "
-        f"executaveis: {'sim' if has_binary else 'nao'}, "
-        f"exemplos: {samples})"
+        f"  ({size / (1024 * 1024):.1f} MB, exemplos: {samples})"
     )
+    print(f"           executaveis: {executaveis}")
     return target
 
 

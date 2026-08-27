@@ -66,20 +66,35 @@ class TestPackagerPieces(unittest.TestCase):
         )
 
     def test_readme_mentions_the_launcher_of_each_platform(self) -> None:
-        self.assertIn("Converter.sh", self.packager.readme_text("linux", True))
-        self.assertIn("Converter.bat", self.packager.readme_text("windows", True))
+        self.assertIn(
+            "Converter.sh", self.packager.readme_text("linux", {"gc3d", "gc3d-gui"})
+        )
+        self.assertIn(
+            "Converter.bat",
+            self.packager.readme_text("windows", {"gc3d.exe", "gc3d-gui.exe"}),
+        )
 
     def test_readme_says_whether_binary_is_included(self) -> None:
-        com = self.packager.readme_text("linux", True)
-        sem = self.packager.readme_text("linux", False)
+        com = self.packager.readme_text("linux", {"gc3d", "gc3d-gui"})
+        sem = self.packager.readme_text("linux", set())
         self.assertIn("inclui os executaveis", com)
         self.assertIn("NAO inclui executaveis", sem)
+
+    def test_readme_is_honest_about_cli_only_package(self) -> None:
+        """So o executavel de linha de comando: a interface ainda precisa do Python.
+
+        Dizer "nao precisa de Python" nesse caso seria mentira, e o usuario
+        descobriria clicando no lancador da interface e recebendo um erro.
+        """
+        texto = self.packager.readme_text("windows", {"gc3d.exe"})
+        self.assertIn("INTERFACE GRAFICA precisa do Python", texto)
+        self.assertNotIn("NAO e preciso ter Python", texto)
 
     def test_readme_warns_about_55_fps(self) -> None:
         """O FPS e a pegadinha que mais atrapalha quem usa no Blender."""
         for platform in ("linux", "windows"):
             with self.subTest(so=platform):
-                self.assertIn("55", self.packager.readme_text(platform, True))
+                self.assertIn("55", self.packager.readme_text(platform, set()))
 
 
 @unittest.skipUnless(os.path.isfile(EMPACOTAR), "build/empacotar.py ausente")
