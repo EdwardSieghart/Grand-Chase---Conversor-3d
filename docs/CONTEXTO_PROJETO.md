@@ -56,7 +56,7 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
 | Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
 | Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
-| Publicação no GitHub | **pendente**, falta credencial do usuário |
+| Publicação no GitHub | **feita**: github.com/EdwardSieghart/Grand-Chase---Conversor-3d |
 
 ---
 
@@ -72,12 +72,12 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
      Python. Se não conseguir, o `gc3d.exe` (linha de comando) sai bom e o
      `gc3d-gui.exe` pode falhar ao abrir. A alternativa garantida é rodar
      `build\windows\build.bat` numa máquina Windows real.
-2. **Publicação no GitHub.** Sem credencial na máquina: sem chave SSH em
-   `~/.ssh/`, sem token, sem credential helper, sem `gh` CLI. O script
-   `tools/publicar_github.sh` faz tudo em um comando quando houver token ou chave.
-   Os commits estão assinados como `Eduardo <eduardo@localhost>` porque o git
-   global não tinha identidade; ajustar antes de publicar se quiser que o GitHub
-   associe os commits à conta.
+2. **Pacotes prontos ainda não anexados como Release.** O código está publicado,
+   mas os `.zip` de `release/` não. Isso exige um **token** (a API do GitHub não
+   aceita SSH):
+
+       python3 build/empacotar.py --zip
+       ./tools/publicar_github.sh EdwardSieghart Grand-Chase---Conversor-3d --release
 3. **Nada foi testado dentro do jogo.** A evidência é de consistência de formato e
    de ida e volta, não de execução no Grand Chase.
 
@@ -346,7 +346,8 @@ De ferramental:
 
 - Fedora Linux, Python 3.14.7, tkinter presente, git presente.
 - **Sem** `cargo` (o conversor antigo não pôde ser compilado para comparar).
-- **Sem** `gh` CLI, sem chave SSH, sem credential helper.
+- Chave SSH em `~/.ssh/id_ed25519`, registrada na conta do GitHub. **Sem** `gh`
+  CLI e sem token (o token só é necessário para anexar Releases pela API).
 - **Sem** node/npm (o `gltf-validator` oficial não pôde ser usado; daí o
   `tools/glb_inspect.py` escrito à mão a partir da especificação).
 - Pillow 12.3 e numpy 2.4 disponíveis — usados **só** para validação cruzada.
@@ -361,8 +362,7 @@ De ferramental:
 1. **Terminar o `.exe` do Windows.** Rodar `./build/windows/build_wine.sh` de novo
    (reaproveita o download já feito), ou `build\windows\build.bat` numa máquina
    Windows, que é o caminho garantido para a interface gráfica.
-2. **Publicar no GitHub.** `./tools/publicar_github.sh USUARIO REPO` com token ou
-   `--ssh`.
+2. **Anexar os pacotes como Release.** Precisa de token; ver as pendências acima.
 3. **Testar no jogo.** É a única camada de validação que falta.
 4. **P3M v0.6 e v1.0.** Layout documentado. A v1.0 tem multi-bone skinning, que
    exige `Vertex` virar lista de `(joint, weight)`; o exportador GLB já escreve

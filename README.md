@@ -328,40 +328,6 @@ Detalhes, metodologia e os bugs que a validação encontrou em
 
 ---
 
-## Publicando no GitHub
-
-O e-mail da conta **não é suficiente** — o GitHub desativou autenticação por senha
-em 2021, e o e-mail só serve para assinar os commits. Você precisa de um **token
-pessoal** (`github.com/settings/tokens`, escopo `repo`) ou de uma **chave SSH**
-(`github.com/settings/keys`).
-
-```bash
-# com token: cria o repositório e envia o código
-read -rs GITHUB_TOKEN && export GITHUB_TOKEN
-./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer
-
-# anexa os pacotes prontos como Release
-python3 build/empacotar.py --zip
-./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --release
-
-# ou com chave SSH, criando antes o repositório vazio em github.com/new
-./tools/publicar_github.sh SEU_USUARIO grand-chase-3d-importer --ssh
-```
-
-Os pacotes vão como arquivos de uma **Release**, não como commits, e `release/`
-está no `.gitignore`. Isso é deliberado: um executável de 26 MB commitado fica no
-histórico do git para sempre, e cada recompilação somaria outros 26 MB ao tamanho
-do clone. Numa Release o arquivo pode ser substituído e não pesa em quem clona.
-
-Depois da primeira vez, o fluxo normal:
-
-```bash
-git add -A && git commit -m "descrição" && git push
-git tag -a v1.5.0 -m "descrição" && git push --tags
-```
-
----
-
 ## Créditos
 
 - Formato e algoritmo de conversão levantados a partir do
