@@ -6,21 +6,37 @@ pelo Blender, Unity, Godot, Three.js e pelo visualizador do Windows, sem plugin.
 
 Referencia: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
 
-A cena recebida **deve** estar em right-handed (chame `Scene.to_right_handed()`
-antes), porque o glTF define Y-up right-handed. O exportador nao faz a conversao
-por conta propria para nao esconder o passo de quem le o codigo.
+As cenas recebidas **devem** estar em right-handed (chame
+`Scene.to_right_handed()` antes), porque o glTF define Y-up right-handed. O
+exportador nao faz a conversao por conta propria para nao esconder o passo de quem
+le o codigo.
+
+Varios esqueletos num arquivo
+-----------------------------
+`export_glb` aceita uma cena ou **uma lista de cenas**. Cada cena vira um grupo
+independente dentro do mesmo GLB, com o seu proprio esqueleto (`skin`), as suas
+malhas e as suas animacoes.
+
+Isso existe porque juntar varios modelos do Grand Chase num unico arquivo e o caso
+comum — corpo, rosto, cabelo e arma de um personagem — mas eles **nem sempre
+compartilham o esqueleto**. Medindo os 127 modelos do conjunto de teste, ha 18
+esqueletos distintos, e sete deles tem exatamente 15 ossos: a contagem de ossos
+nao identifica o esqueleto. Forçar tudo num esqueleto unico misturaria bind poses
+diferentes e deformaria a malha. O glTF permite varias `skins` no mesmo arquivo, e
+e isso que usamos.
 
 Mapeamento adotado
 ------------------
-Hierarquia de nos:
+Hierarquia de nos, com um bloco por grupo:
 
-    0 .. J-1    um no por joint, na mesma ordem de `Scene.skeleton`
-    J           no "root", pai de todos os joints sem pai
-    J+1 ...     um no por malha, cada um apontando para a skin
+    grupo 0:  joints 0..J0-1,  depois o no "root_0"
+    grupo 1:  joints ...,      depois o no "root_1"
+    ...
+    depois:   um no por malha, cada um apontando para a skin do seu grupo
 
 Como os joints do Grand Chase so tem translacao no bind pose, a inverse bind
 matrix de cada joint e simplesmente uma translacao pelo negativo da sua posicao
-mundial. As animacoes viram: um canal de `translation` no no "root" (o
+mundial. As animacoes viram: um canal de `translation` no no "root" do grupo (o
 deslocamento do personagem) e um canal de `rotation` por joint.
 """
 
@@ -28,11 +44,11 @@ from __future__ import annotations
 
 import json
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..binary import BinaryWriter
 from ..mathutil import mat4_to_quaternion
-from ..scene import NO_JOINT, Scene
+from ..scene import NO_JOINT, Mesh, Scene
 
 __all__ = ["GlbOptions", "export_glb", "write_glb"]
 
@@ -41,6 +57,9 @@ _UNSIGNED_BYTE = 5121
 _UNSIGNED_SHORT = 5123
 _UNSIGNED_INT = 5125
 _FLOAT = 5126
+
+_TARGET_ARRAY_BUFFER = 34962
+_TARGET_ELEMENT_ARRAY_BUFFER = 34963
 
 _GLB_MAGIC = 0x46546C67  # "glTF"
 _GLB_VERSION = 2
@@ -54,15 +73,35 @@ GENERATOR = "Grand Chase 3D Importer (gc3d)"
 class GlbOptions:
     """Opcoes de exportacao."""
 
-    #: Bytes de uma imagem PNG a ser embutida como textura base color.
+    #: Textura aplicada as malhas que nao trazem a sua propria em
+    #: `Mesh.texture_png`. Mantida para o caso de um modelo unico.
     texture_png: bytes | None = None
     #: Renderiza as faces dos dois lados. Ligado por padrao porque muitos
     #: modelos do Grand Chase sao modelados como superficies abertas.
     double_sided: bool = True
     #: "OPAQUE", "MASK" ou "BLEND". Se None, decide sozinho conforme a textura.
     alpha_mode: str | None = None
-    #: Grava tambem o JSON legivel ao lado (util para depuracao).
+    #: Grava o JSON legivel (util para depuracao). Gera arquivo maior.
     pretty_json: bool = False
+
+
+@dataclass
+class _Group:
+    """Um esqueleto com as suas malhas e animacoes, dentro do GLB."""
+
+    scene: Scene
+    #: Indice do primeiro no de joint deste grupo.
+    joint_offset: int = 0
+    #: Indice do no "root" deste grupo, ou None se nao houver esqueleto.
+    root_node: int | None = None
+    #: Indice da skin deste grupo, ou None.
+    skin_index: int | None = None
+    #: Indices dos nos de malha deste grupo.
+    mesh_nodes: list[int] = field(default_factory=list)
+
+    @property
+    def num_joints(self) -> int:
+        return len(self.scene.skeleton)
 
 
 class _GltfBuilder:
@@ -80,8 +119,11 @@ class _GltfBuilder:
         self.textures: list[dict] = []
         self.images: list[dict] = []
         self.samplers: list[dict] = []
-        #: Indices dos nos que sao raiz da cena. Preenchido antes de `to_glb`.
+        #: Indices dos nos que sao raiz da cena.
         self.scene_roots: list[int] = []
+        #: Cache de textura -> indice de material, para nao duplicar a mesma
+        #: imagem quando varias malhas usam o mesmo arquivo.
+        self._material_cache: dict[bytes | None, int] = {}
 
     # ------------------------------------------------------------ acessores
 
@@ -135,26 +177,20 @@ class _GltfBuilder:
             "asset": {"version": "2.0", "generator": GENERATOR},
             "scene": 0,
         }
-        if self.nodes:
-            root["nodes"] = self.nodes
-        if self.meshes:
-            root["meshes"] = self.meshes
-        if self.skins:
-            root["skins"] = self.skins
-        if self.animations:
-            root["animations"] = self.animations
-        if self.materials:
-            root["materials"] = self.materials
-        if self.textures:
-            root["textures"] = self.textures
-        if self.images:
-            root["images"] = self.images
-        if self.samplers:
-            root["samplers"] = self.samplers
-        if self.accessors:
-            root["accessors"] = self.accessors
-        if self.buffer_views:
-            root["bufferViews"] = self.buffer_views
+        for key, value in (
+            ("nodes", self.nodes),
+            ("meshes", self.meshes),
+            ("skins", self.skins),
+            ("animations", self.animations),
+            ("materials", self.materials),
+            ("textures", self.textures),
+            ("images", self.images),
+            ("samplers", self.samplers),
+            ("accessors", self.accessors),
+            ("bufferViews", self.buffer_views),
+        ):
+            if value:
+                root[key] = value
 
         bin_chunk = self.buffer.getvalue()
         # O comprimento declarado do buffer deve cobrir o padding do chunk.
@@ -181,51 +217,135 @@ class _GltfBuilder:
         return bytes(out)
 
 
-def export_glb(scene: Scene, options: GlbOptions | None = None) -> bytes:
-    """Serializa uma `Scene` right-handed em bytes de um arquivo GLB."""
+# ------------------------------------------------------------------- fachada
+
+
+def export_glb(
+    scenes: Scene | list[Scene], options: GlbOptions | None = None
+) -> bytes:
+    """Serializa uma cena, ou varias, num unico arquivo GLB.
+
+    Cada cena da lista vira um grupo com esqueleto proprio. Todas precisam estar
+    em right-handed.
+    """
     options = options or GlbOptions()
-    if not scene.right_handed:
-        raise ValueError(
-            "a cena ainda esta em left-handed; chame Scene.to_right_handed() "
-            "antes de exportar para glTF"
-        )
+    groups_input = [scenes] if isinstance(scenes, Scene) else list(scenes)
+    groups_input = [s for s in groups_input if s.meshes or s.animations]
+    if not groups_input:
+        raise ValueError("nada para exportar: nenhuma malha e nenhuma animacao")
+
+    for scene in groups_input:
+        if not scene.right_handed:
+            raise ValueError(
+                "a cena ainda esta em left-handed; chame Scene.to_right_handed() "
+                "antes de exportar para glTF"
+            )
 
     builder = _GltfBuilder()
-    num_joints = len(scene.skeleton)
+    groups = [_Group(scene=scene) for scene in groups_input]
 
-    material_index = _add_material(builder, options)
-    _add_nodes(builder, scene, num_joints)
-    _add_meshes(builder, scene, num_joints, material_index)
-    skin_index = _add_skin(builder, scene, num_joints)
-    _attach_skin_to_mesh_nodes(builder, scene, num_joints, skin_index)
-    _add_animations(builder, scene, num_joints)
+    # 1. Nos de joint e no "root" de cada grupo, em blocos consecutivos.
+    cursor = 0
+    for index, group in enumerate(groups):
+        group.joint_offset = cursor
+        cursor = _add_joint_nodes(builder, group, index, len(groups))
+    # 2. Nos de malha, depois de todos os esqueletos.
+    mesh_counter = 0
+    for group in groups:
+        cursor, mesh_counter = _add_mesh_nodes(builder, group, cursor, mesh_counter)
 
-    # Raizes da cena: o no root do esqueleto e os nos de malha.
-    roots: list[int] = []
-    if num_joints:
-        roots.append(num_joints)
-    mesh_node_start = num_joints + 1 if num_joints else 0
-    roots.extend(range(mesh_node_start, mesh_node_start + len(scene.meshes)))
+    # 3. Malhas, materiais e skins.
+    for group in groups:
+        _add_meshes(builder, group, options)
+        _add_skin(builder, group)
+    # 4. Animacoes, que referenciam os nos ja criados.
+    for group in groups:
+        _add_animations(builder, group)
+
+    roots: list[int] = [g.root_node for g in groups if g.root_node is not None]
+    for group in groups:
+        roots.extend(group.mesh_nodes)
     builder.scene_roots = roots
 
     return builder.to_glb(options.pretty_json)
 
 
-def write_glb(scene: Scene, path, options: GlbOptions | None = None) -> int:
-    """Exporta a cena e grava em disco. Devolve o tamanho em bytes."""
-    data = export_glb(scene, options)
+def write_glb(
+    scenes: Scene | list[Scene], path, options: GlbOptions | None = None
+) -> int:
+    """Exporta e grava em disco. Devolve o tamanho em bytes."""
+    data = export_glb(scenes, options)
     with open(path, "wb") as handle:
         handle.write(data)
     return len(data)
 
 
+# ---------------------------------------------------------------------- nos
+
+
+def _add_joint_nodes(
+    builder: _GltfBuilder, group: _Group, index: int, total_groups: int
+) -> int:
+    """Cria os nos de joint e o no raiz do grupo. Devolve o proximo indice livre."""
+    scene = group.scene
+    offset = group.joint_offset
+
+    for position, joint in enumerate(scene.skeleton):
+        node: dict = {"name": joint.name or f"bone_{position}"}
+        if joint.children:
+            # Os indices de filho sao locais ao esqueleto; viram indices de no.
+            node["children"] = [offset + child for child in joint.children]
+        if joint.translation != (0.0, 0.0, 0.0):
+            node["translation"] = list(joint.translation)
+        builder.nodes.append(node)
+
+    if not scene.skeleton:
+        group.root_node = None
+        return offset
+
+    # Com um grupo so, mantemos o nome "root" — e o que o importador procura ao
+    # trazer o arquivo de volta. Com varios, cada um recebe um sufixo.
+    name = "root" if total_groups == 1 else f"root_{index}"
+    root_node: dict = {"name": name}
+    roots = scene.root_joints()
+    if roots:
+        root_node["children"] = [offset + r for r in roots]
+    builder.nodes.append(root_node)
+    group.root_node = offset + group.num_joints
+    return group.root_node + 1
+
+
+def _add_mesh_nodes(
+    builder: _GltfBuilder, group: _Group, cursor: int, mesh_counter: int
+) -> tuple[int, int]:
+    """Cria um no por malha do grupo.
+
+    As malhas em si sao criadas depois (precisam dos acessores), mas o no ja tem
+    de apontar para o indice que a malha vai receber. Como `_add_meshes` percorre
+    os grupos na mesma ordem, basta manter um contador corrido — daí o
+    `mesh_counter` entrar e sair da funcao.
+    """
+    for mesh in group.scene.meshes:
+        builder.nodes.append({"name": f"mesh_{mesh.name}", "mesh": mesh_counter})
+        group.mesh_nodes.append(cursor)
+        cursor += 1
+        mesh_counter += 1
+    return cursor, mesh_counter
+
+
 # ------------------------------------------------------------------ material
 
 
-def _add_material(builder: _GltfBuilder, options: GlbOptions) -> int | None:
-    """Cria um material PBR simples, com textura embutida se houver."""
+def _add_material(
+    builder: _GltfBuilder, options: GlbOptions, texture_png: bytes | None, name: str
+) -> int:
+    """Cria (ou reaproveita) um material PBR, com textura embutida se houver."""
+    cache_key = texture_png
+    if cache_key in builder._material_cache:
+        return builder._material_cache[cache_key]
+
     material: dict = {
-        "name": "gc3d_material",
+        "name": name,
         "doubleSided": options.double_sided,
         "pbrMetallicRoughness": {
             # Modelos do Grand Chase sao pintados a mao: sem metalicidade e
@@ -236,20 +356,25 @@ def _add_material(builder: _GltfBuilder, options: GlbOptions) -> int | None:
     }
 
     has_alpha = False
-    if options.texture_png:
-        view = builder.add_buffer_view(options.texture_png)
+    if texture_png:
+        view = builder.add_buffer_view(texture_png)
         builder.images.append({"bufferView": view, "mimeType": "image/png"})
-        builder.samplers.append(
-            {
-                "magFilter": 9729,  # LINEAR
-                "minFilter": 9987,  # LINEAR_MIPMAP_LINEAR
-                "wrapS": 10497,  # REPEAT
-                "wrapT": 10497,  # REPEAT
-            }
+        if not builder.samplers:
+            builder.samplers.append(
+                {
+                    "magFilter": 9729,  # LINEAR
+                    "minFilter": 9987,  # LINEAR_MIPMAP_LINEAR
+                    "wrapS": 10497,  # REPEAT
+                    "wrapT": 10497,  # REPEAT
+                }
+            )
+        builder.textures.append(
+            {"sampler": 0, "source": len(builder.images) - 1}
         )
-        builder.textures.append({"sampler": 0, "source": 0})
-        material["pbrMetallicRoughness"]["baseColorTexture"] = {"index": 0}
-        has_alpha = _png_has_alpha(options.texture_png)
+        material["pbrMetallicRoughness"]["baseColorTexture"] = {
+            "index": len(builder.textures) - 1
+        }
+        has_alpha = _png_has_alpha(texture_png)
 
     alpha_mode = options.alpha_mode
     if alpha_mode is None:
@@ -261,7 +386,9 @@ def _add_material(builder: _GltfBuilder, options: GlbOptions) -> int | None:
             material["alphaCutoff"] = 0.5
 
     builder.materials.append(material)
-    return 0
+    index = len(builder.materials) - 1
+    builder._material_cache[cache_key] = index
+    return index
 
 
 def _png_has_alpha(png: bytes) -> bool:
@@ -270,145 +397,126 @@ def _png_has_alpha(png: bytes) -> bool:
     # colorType e o 10o byte do IHDR (offset 25 no arquivo).
     if len(png) < 26 or png[12:16] != b"IHDR":
         return False
-    color_type = png[25]
-    return color_type in (4, 6)  # grayscale+alpha, RGBA
-
-
-# ---------------------------------------------------------------------- nos
-
-
-def _add_nodes(builder: _GltfBuilder, scene: Scene, num_joints: int) -> None:
-    for index, joint in enumerate(scene.skeleton):
-        node: dict = {"name": joint.name or f"bone_{index}"}
-        if joint.children:
-            node["children"] = list(joint.children)
-        if joint.translation != (0.0, 0.0, 0.0):
-            node["translation"] = list(joint.translation)
-        builder.nodes.append(node)
-
-    if num_joints:
-        root_node: dict = {"name": "root"}
-        roots = scene.root_joints()
-        if roots:
-            root_node["children"] = roots
-        builder.nodes.append(root_node)
-
-    for mesh_index, mesh in enumerate(scene.meshes):
-        builder.nodes.append(
-            {"name": f"mesh_{mesh.name}", "mesh": mesh_index}
-        )
-
-
-def _attach_skin_to_mesh_nodes(
-    builder: _GltfBuilder, scene: Scene, num_joints: int, skin_index: int | None
-) -> None:
-    if skin_index is None:
-        return
-    start = num_joints + 1 if num_joints else 0
-    for offset in range(len(scene.meshes)):
-        builder.nodes[start + offset]["skin"] = skin_index
+    return png[25] in (4, 6)  # grayscale+alpha, RGBA
 
 
 # ------------------------------------------------------------------- malhas
 
 
-def _add_meshes(
-    builder: _GltfBuilder, scene: Scene, num_joints: int, material_index: int | None
-) -> None:
-    for mesh in scene.meshes:
-        vertices = mesh.vertices
-        count = len(vertices)
-
-        positions = BinaryWriter()
-        normals = BinaryWriter()
-        uvs = BinaryWriter()
-        joints = BinaryWriter()
-        weights = BinaryWriter()
-
-        min_pos = [float("inf")] * 3
-        max_pos = [float("-inf")] * 3
-        for vertex in vertices:
-            px, py, pz = vertex.position
-            positions.f32s((px, py, pz))
-            if px < min_pos[0]:
-                min_pos[0] = px
-            if py < min_pos[1]:
-                min_pos[1] = py
-            if pz < min_pos[2]:
-                min_pos[2] = pz
-            if px > max_pos[0]:
-                max_pos[0] = px
-            if py > max_pos[1]:
-                max_pos[1] = py
-            if pz > max_pos[2]:
-                max_pos[2] = pz
-
-            normals.f32s(vertex.normal)
-            uvs.f32s(vertex.uv)
-
-            if num_joints:
-                joint = vertex.joint
-                if joint == NO_JOINT:
-                    joints.bytes(bytes((0, 0, 0, 0)))
-                    weights.f32s((0.0, 0.0, 0.0, 0.0))
-                else:
-                    joints.bytes(bytes((joint & 0xFF, 0, 0, 0)))
-                    weights.f32s((vertex.weight, 0.0, 0.0, 0.0))
-
-        if count == 0:
-            min_pos = [0.0, 0.0, 0.0]
-            max_pos = [0.0, 0.0, 0.0]
-
-        attributes: dict = {
-            "POSITION": builder.add_accessor(
-                positions.getvalue(), _FLOAT, "VEC3", count, min_pos, max_pos,
-                target=34962,
-            ),
-            "NORMAL": builder.add_accessor(
-                normals.getvalue(), _FLOAT, "VEC3", count, target=34962
-            ),
-            "TEXCOORD_0": builder.add_accessor(
-                uvs.getvalue(), _FLOAT, "VEC2", count, target=34962
-            ),
-        }
-        if num_joints:
-            attributes["JOINTS_0"] = builder.add_accessor(
-                joints.getvalue(), _UNSIGNED_BYTE, "VEC4", count, target=34962
-            )
-            attributes["WEIGHTS_0"] = builder.add_accessor(
-                weights.getvalue(), _FLOAT, "VEC4", count, target=34962
-            )
-
-        # Usa u16 quando cabe (metade do tamanho); u32 nas malhas grandes.
-        if count > 0xFFFF:
-            index_data = struct.pack(f"<{len(mesh.indices)}I", *mesh.indices)
-            index_type = _UNSIGNED_INT
-        else:
-            index_data = struct.pack(f"<{len(mesh.indices)}H", *mesh.indices)
-            index_type = _UNSIGNED_SHORT
-        indices_accessor = builder.add_accessor(
-            index_data, index_type, "SCALAR", len(mesh.indices), target=34963
+def _add_meshes(builder: _GltfBuilder, group: _Group, options: GlbOptions) -> None:
+    num_joints = group.num_joints
+    for mesh in group.scene.meshes:
+        primitive = _build_primitive(builder, mesh, num_joints)
+        # A textura da malha tem prioridade; `options.texture_png` e o fallback
+        # para o caso de um modelo unico convertido pela via antiga.
+        texture = (
+            mesh.texture_png if mesh.texture_png is not None else options.texture_png
         )
-
-        primitive: dict = {
-            "attributes": attributes,
-            "indices": indices_accessor,
-            "mode": 4,  # TRIANGLES
-        }
-        if material_index is not None:
-            primitive["material"] = material_index
-
+        primitive["material"] = _add_material(
+            builder, options, texture, f"mat_{mesh.name}"
+        )
         builder.meshes.append(
             {"name": f"mesh_{mesh.name}", "primitives": [primitive]}
         )
 
 
+def _build_primitive(builder: _GltfBuilder, mesh: Mesh, num_joints: int) -> dict:
+    vertices = mesh.vertices
+    count = len(vertices)
+
+    positions = BinaryWriter()
+    normals = BinaryWriter()
+    uvs = BinaryWriter()
+    joints = BinaryWriter()
+    weights = BinaryWriter()
+
+    min_pos = [float("inf")] * 3
+    max_pos = [float("-inf")] * 3
+    for vertex in vertices:
+        px, py, pz = vertex.position
+        positions.f32s((px, py, pz))
+        if px < min_pos[0]:
+            min_pos[0] = px
+        if py < min_pos[1]:
+            min_pos[1] = py
+        if pz < min_pos[2]:
+            min_pos[2] = pz
+        if px > max_pos[0]:
+            max_pos[0] = px
+        if py > max_pos[1]:
+            max_pos[1] = py
+        if pz > max_pos[2]:
+            max_pos[2] = pz
+
+        normals.f32s(vertex.normal)
+        uvs.f32s(vertex.uv)
+
+        if num_joints:
+            joint = vertex.joint
+            if joint == NO_JOINT:
+                joints.bytes(bytes((0, 0, 0, 0)))
+                weights.f32s((0.0, 0.0, 0.0, 0.0))
+            else:
+                joints.bytes(bytes((joint & 0xFF, 0, 0, 0)))
+                weights.f32s((vertex.weight, 0.0, 0.0, 0.0))
+
+    if count == 0:
+        min_pos = [0.0, 0.0, 0.0]
+        max_pos = [0.0, 0.0, 0.0]
+
+    attributes: dict = {
+        "POSITION": builder.add_accessor(
+            positions.getvalue(), _FLOAT, "VEC3", count, min_pos, max_pos,
+            target=_TARGET_ARRAY_BUFFER,
+        ),
+        "NORMAL": builder.add_accessor(
+            normals.getvalue(), _FLOAT, "VEC3", count,
+            target=_TARGET_ARRAY_BUFFER,
+        ),
+        "TEXCOORD_0": builder.add_accessor(
+            uvs.getvalue(), _FLOAT, "VEC2", count,
+            target=_TARGET_ARRAY_BUFFER,
+        ),
+    }
+    if num_joints:
+        attributes["JOINTS_0"] = builder.add_accessor(
+            joints.getvalue(), _UNSIGNED_BYTE, "VEC4", count,
+            target=_TARGET_ARRAY_BUFFER,
+        )
+        attributes["WEIGHTS_0"] = builder.add_accessor(
+            weights.getvalue(), _FLOAT, "VEC4", count,
+            target=_TARGET_ARRAY_BUFFER,
+        )
+
+    # Usa u16 quando cabe (metade do tamanho); u32 nas malhas grandes.
+    if count > 0xFFFF:
+        index_data = struct.pack(f"<{len(mesh.indices)}I", *mesh.indices)
+        index_type = _UNSIGNED_INT
+    else:
+        index_data = struct.pack(f"<{len(mesh.indices)}H", *mesh.indices)
+        index_type = _UNSIGNED_SHORT
+    indices_accessor = builder.add_accessor(
+        index_data, index_type, "SCALAR", len(mesh.indices),
+        target=_TARGET_ELEMENT_ARRAY_BUFFER,
+    )
+
+    return {
+        "attributes": attributes,
+        "indices": indices_accessor,
+        "mode": 4,  # TRIANGLES
+    }
+
+
 # --------------------------------------------------------------------- skin
 
 
-def _add_skin(builder: _GltfBuilder, scene: Scene, num_joints: int) -> int | None:
+def _add_skin(builder: _GltfBuilder, group: _Group) -> None:
+    num_joints = group.num_joints
     if not num_joints:
-        return None
+        return
+
+    scene = group.scene
+    offset = group.joint_offset
 
     # Inverse bind matrix = translacao pelo negativo da posicao mundial do
     # joint. Isso funciona porque o bind pose do Grand Chase e puramente
@@ -424,30 +532,31 @@ def _add_skin(builder: _GltfBuilder, scene: Scene, num_joints: int) -> int | Non
                 -wx, -wy, -wz, 1.0,
             )
         )
-    accessor = builder.add_accessor(
-        writer.getvalue(), _FLOAT, "MAT4", num_joints
-    )
+    accessor = builder.add_accessor(writer.getvalue(), _FLOAT, "MAT4", num_joints)
 
     builder.skins.append(
         {
-            "name": "gc3d_skin",
+            "name": f"skin_{len(builder.skins)}",
             "inverseBindMatrices": accessor,
-            "joints": list(range(num_joints)),
-            "skeleton": num_joints,  # o no "root"
+            "joints": [offset + i for i in range(num_joints)],
+            "skeleton": group.root_node,
         }
     )
-    return 0
+    group.skin_index = len(builder.skins) - 1
+    for node_index in group.mesh_nodes:
+        builder.nodes[node_index]["skin"] = group.skin_index
 
 
 # ---------------------------------------------------------------- animacoes
 
 
-def _add_animations(builder: _GltfBuilder, scene: Scene, num_joints: int) -> None:
-    if not num_joints:
+def _add_animations(builder: _GltfBuilder, group: _Group) -> None:
+    num_joints = group.num_joints
+    if not num_joints or group.root_node is None:
         return
-    root_node = num_joints
+    offset = group.joint_offset
 
-    for animation in scene.animations:
+    for animation in group.scene.animations:
         if not animation.frames:
             continue
 
@@ -464,7 +573,7 @@ def _add_animations(builder: _GltfBuilder, scene: Scene, num_joints: int) -> Non
         samplers: list[dict] = []
         channels: list[dict] = []
 
-        # Canal de deslocamento do personagem, no no "root".
+        # Canal de deslocamento do personagem, no no "root" do grupo.
         translations = BinaryWriter()
         for frame in animation.frames:
             translations.f32s(frame.translation)
@@ -474,7 +583,7 @@ def _add_animations(builder: _GltfBuilder, scene: Scene, num_joints: int) -> Non
         channels.append(
             {
                 "sampler": len(samplers),
-                "target": {"node": root_node, "path": "translation"},
+                "target": {"node": group.root_node, "path": "translation"},
             }
         )
         samplers.append(
@@ -507,7 +616,7 @@ def _add_animations(builder: _GltfBuilder, scene: Scene, num_joints: int) -> Non
             channels.append(
                 {
                     "sampler": len(samplers),
-                    "target": {"node": joint_index, "path": "rotation"},
+                    "target": {"node": offset + joint_index, "path": "rotation"},
                 }
             )
             samplers.append(
@@ -519,9 +628,5 @@ def _add_animations(builder: _GltfBuilder, scene: Scene, num_joints: int) -> Non
             )
 
         builder.animations.append(
-            {
-                "name": animation.name,
-                "samplers": samplers,
-                "channels": channels,
-            }
+            {"name": animation.name, "samplers": samplers, "channels": channels}
         )

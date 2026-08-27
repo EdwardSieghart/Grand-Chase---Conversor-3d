@@ -95,10 +95,14 @@ Uma tela só, tema escuro:
    juntos. Pastas soltas são varridas recursivamente.
 2. A faixa azul no topo mostra o sentido detectado e o que será feito, por exemplo
    `P3M + FRM -> GLB     3 modelo(s), 67 animacao(oes), casadas por ossos`.
-3. Em **Animações**, escolha entre incluir só as compatíveis com cada modelo
-   (padrão) ou **todas** as carregadas. Em qualquer um dos casos, todas as
-   animações incluídas vão juntas em **um único `.glb` por modelo**.
-4. Escolha a pasta de saída e clique em **Converter**.
+3. Escolha a pasta de saída e clique em **Converter**.
+
+Por padrão, **tudo vira um único `.glb`**: todos os modelos e todas as animações
+no mesmo arquivo. É o que faz sentido para um personagem, que costuma vir em
+vários `.p3m` (corpo, rosto, cabelo, arma). Desmarque *Juntar tudo em um único
+.glb* para gerar um arquivo por modelo.
+
+As animações são **sempre incluídas**, sem exigir que o número de ossos case.
 
 A lista é limpa ao terminar, então o próximo trabalho começa do zero sem risco de
 reconverter por engano. A conversão roda em segundo plano (a janela não congela) e
@@ -117,8 +121,13 @@ python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
 # devolver para o jogo (gera .p3m, .frm e .png)
 python3 gc3d_cli.py convert personagem.glb -o saida/
 
+# um personagem inteiro (varios .p3m) num unico .glb
+python3 gc3d_cli.py convert corpo.p3m rosto.p3m arma.p3m --merge \
+    --anim-dir animacoes/ -o saida/
+
 # pastas inteiras, em qualquer sentido
 python3 gc3d_cli.py batch "GRAND CHASE/Models" --anim-dir animacoes/ -o saida/
+python3 gc3d_cli.py batch "GRAND CHASE/Models" --merge -o saida/   # tudo num arquivo
 python3 gc3d_cli.py batch modelos_editados/ -o saida/
 
 # inspecionar sem converter (aceita os três formatos)
@@ -131,7 +140,8 @@ Opções que costumam ser úteis:
 |-------|--------|
 | `--anim-dir PASTA` | inclui as animações compatíveis da pasta |
 | `-a ARQUIVO.frm` | inclui uma animação específica (pode repetir) |
-| `--all-anims` | inclui **todas** as animações, sem exigir o mesmo número de ossos |
+| `--merge` | junta tudo em um único `.glb` |
+| `--match-bones` | inclui só as animações com o mesmo número de ossos (o padrão é incluir todas) |
 | `--texture-dir PASTA` | procura texturas também nesta pasta |
 | `--texture ARQUIVO` | usa uma textura específica |
 | `--no-texture` | não embute nem extrai textura |
@@ -152,14 +162,13 @@ o mesmo número de ossos**. É uma restrição do próprio formato, não um palp
 Funciona bem porque os personagens do Grand Chase usam poucos esqueletos
 distintos (15 e 23 ossos nos arquivos analisados).
 
-Quando nenhuma animação casa, o programa **diz por quê** — quantos ossos o modelo
-tem, quantos as animações têm, e que a verificação pode ser desligada. Antes isso
-era silencioso, e parecia que o conversor não suportava várias animações.
+**Por padrão as animações são todas incluídas**, sem filtro. O número de ossos é um
+critério grosseiro — medindo os 127 modelos do conjunto de teste há **18 esqueletos
+distintos, e sete deles com exatamente 15 ossos** —, e uma animação descartada em
+silêncio parece um defeito do programa. Use `--match-bones` para restringir.
 
-Para forçar, use `--all-anims` na linha de comando ou a segunda opção do painel
-**Animações** na janela. Aí todas as animações carregadas entram em cada modelo,
-num único `.glb`. Já foi testado com 68 animações e 4.081 keyframes num arquivo
-só.
+No modo unificado, cada animação entra no esqueleto cuja contagem de ossos ela usa.
+Se nenhum casar, entra no maior, com aviso. Nenhuma animação é descartada.
 
 ---
 
@@ -206,7 +215,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │       ├── glb.py         Escreve glTF 2.0 binário
 │       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
 ├── requirements-optional.txt  Dependências opcionais (drag and drop, build)
-├── tests/                 147 testes, só com a biblioteca padrão
+├── tests/                 168 testes, só com a biblioteca padrão
 ├── tools/
 │   ├── glb_inspect.py     Inspeciona, valida e compara GLB
 │   ├── validate_all.py    Validação em massa da direção direta
@@ -235,7 +244,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 python3 -m unittest discover -s tests -t .
 ```
 
-147 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
+168 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
 # direção direta: lê tudo e confere os GLB gerados

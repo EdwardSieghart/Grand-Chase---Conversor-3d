@@ -40,6 +40,7 @@ from gc3d import (  # noqa: E402
     Direction,
     __version__,
     collect_inputs,
+    convert_merged,
     convert_model,
     convert_to_gc,
     find_animations_for_model,
@@ -93,7 +94,7 @@ def _options_from_args(args: argparse.Namespace) -> ConvertOptions:
         pretty_json=args.pretty_json,
         export_animations=not args.no_animations,
         extract_texture=not args.no_texture,
-        match_animations_by_bones=not args.all_anims,
+        match_animations_by_bones=args.match_bones,
     )
 
 
@@ -134,16 +135,42 @@ def cmd_convert(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    if len(models) > 1:
+
+    options = _options_from_args(args)
+
+    # Varios modelos so fazem sentido juntos num arquivo. Sem --merge, o comando
+    # certo e 'batch'.
+    if len(models) > 1 and not args.merge:
         print(
-            f"{len(models)} modelos informados; use o comando 'batch' para "
-            f"converter varios de uma vez",
+            f"{len(models)} modelos informados. Use --merge para juntar todos "
+            f"em um unico .glb, ou o comando 'batch' para gerar um arquivo por "
+            f"modelo.",
             file=sys.stderr,
         )
         return 2
 
+    if args.merge:
+        animations = list(animations)
+        if args.anim_dir and os.path.isdir(args.anim_dir):
+            animations.extend(
+                os.path.join(args.anim_dir, name)
+                for name in sorted(os.listdir(args.anim_dir))
+                if name.lower().endswith(".frm")
+            )
+        if not models:
+            print("--merge exige pelo menos um modelo .p3m", file=sys.stderr)
+            return 2
+        output_path = _merge_output_path(args.output, models)
+        if not args.quiet:
+            print(
+                f"juntando {len(models)} modelo(s) e {len(animations)} "
+                f"animacao(oes) em {os.path.basename(output_path)}"
+            )
+        result = convert_merged(models, animations, output_path, options)
+        _print_result(result, args.verbose, args.quiet)
+        return 0 if result.ok else 1
+
     model = models[0] if models else None
-    options = _options_from_args(args)
 
     if args.anim_dir and model:
         from gc3d import AnimationIndex
@@ -177,6 +204,25 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _merge_output_path(output: str | None, model_paths: list[str]) -> str:
+    """Caminho do arquivo unico ao juntar varios modelos."""
+    if output and output.lower().endswith(".glb"):
+        return output
+    stems = [os.path.splitext(os.path.basename(p))[0] for p in model_paths]
+    if len(stems) == 1:
+        name = stems[0]
+    else:
+        common = os.path.commonprefix(stems).strip(" _-")
+        if len(common) >= 3:
+            name = common
+        else:
+            name = (
+                os.path.basename(os.path.dirname(os.path.abspath(model_paths[0])))
+                or "modelo_completo"
+            )
+    return os.path.join(output or ".", name + ".glb")
+
+
 def cmd_batch(args: argparse.Namespace) -> int:
     models, _, gltfs = collect_inputs(args.inputs, recursive=not args.no_recursive)
 
@@ -202,6 +248,28 @@ def cmd_batch(args: argparse.Namespace) -> int:
         print(
             f"{Direction.LABELS[direction]}: {len(inputs)} arquivo(s) -> {args.output}"
         )
+
+    # Modo juntar: um unico GLB com todos os modelos e animacoes encontrados.
+    if args.merge and direction == Direction.TO_GLTF:
+        _, animations_found, _ = collect_inputs(
+            args.inputs, recursive=not args.no_recursive
+        )
+        animations = list(animations_found)
+        if args.anim_dir and os.path.isdir(args.anim_dir):
+            animations.extend(
+                os.path.join(args.anim_dir, name)
+                for name in sorted(os.listdir(args.anim_dir))
+                if name.lower().endswith(".frm")
+            )
+        output_path = _merge_output_path(args.output, models)
+        if not args.quiet:
+            print(
+                f"juntando {len(models)} modelo(s) e {len(animations)} "
+                f"animacao(oes) em {os.path.basename(output_path)}"
+            )
+        result = convert_merged(models, animations, output_path, options)
+        _print_result(result, args.verbose, args.quiet)
+        return 0 if result.ok else 1
 
     results: list[ConvertResult] = []
     animation_index = None
@@ -424,11 +492,19 @@ def build_parser() -> argparse.ArgumentParser:
             help="ao converter glTF de volta, nao gravar os arquivos .frm",
         )
         sub.add_argument(
-            "--all-anims",
+            "--match-bones",
             action="store_true",
             help=(
-                "inclui todas as animacoes em cada modelo, sem exigir o mesmo "
-                "numero de ossos (o padrao e casar por ossos)"
+                "inclui apenas as animacoes com o mesmo numero de ossos do "
+                "modelo (o padrao e incluir todas)"
+            ),
+        )
+        sub.add_argument(
+            "--merge",
+            action="store_true",
+            help=(
+                "junta todos os modelos e animacoes em um unico .glb, em vez de "
+                "um arquivo por modelo"
             ),
         )
         sub.add_argument("-v", "--verbose", action="store_true", help="mais detalhes")

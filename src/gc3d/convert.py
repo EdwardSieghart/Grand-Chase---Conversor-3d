@@ -37,6 +37,8 @@ __all__ = [
     "convert_model",
     "convert_to_gc",
     "convert_batch",
+    "convert_merged",
+    "skeleton_signature",
     "find_animations_for_model",
     "collect_inputs",
 ]
@@ -91,8 +93,11 @@ class ConvertOptions:
 
     # ---- selecao de animacoes (apenas P3M/FRM -> GLB)
     #: Se True, cada modelo recebe apenas as animacoes com o mesmo numero de
-    #: ossos. Se False, recebe todas as animacoes informadas.
-    match_animations_by_bones: bool = True
+    #: ossos. O padrao e **False**: incluir tudo e o comportamento menos
+    #: surpreendente, porque a contagem de ossos e um filtro grosseiro (ha sete
+    #: esqueletos diferentes com 15 ossos no conjunto de teste) e uma animacao
+    #: descartada em silencio parece um defeito do programa.
+    match_animations_by_bones: bool = False
 
 
 @dataclass
@@ -230,6 +235,191 @@ def _resolve_texture(
     except (DdsError, OSError, ValueError) as error:
         warn.append(f"falha ao converter a textura {os.path.basename(path)}: {error}")
         return None, None
+
+
+# ------------------------------------------- P3M/FRM -> um unico GLB (juntando)
+
+
+def skeleton_signature(scene: Scene) -> tuple:
+    """Assinatura que identifica um esqueleto, para agrupar modelos.
+
+    Nao basta o numero de ossos: medindo os 127 modelos do conjunto de teste ha
+    **18 esqueletos distintos**, e sete deles tem exatamente 15 ossos. Juntar
+    modelos de esqueletos diferentes num unico `skin` misturaria bind poses e
+    deformaria a malha, entao a assinatura inclui as translacoes e a hierarquia.
+
+    As translacoes sao arredondadas porque vem de float de 32 bits e a comparacao
+    exata seria fragil.
+    """
+    return (
+        len(scene.skeleton),
+        tuple(
+            tuple(round(component, 5) for component in joint.translation)
+            for joint in scene.skeleton
+        ),
+        tuple(joint.parent for joint in scene.skeleton),
+        tuple(tuple(joint.children) for joint in scene.skeleton),
+    )
+
+
+def convert_merged(
+    model_paths: list[str] | tuple[str, ...],
+    animation_paths: list[str] | tuple[str, ...],
+    output_path: str,
+    options: ConvertOptions | None = None,
+) -> ConvertResult:
+    """Converte varios modelos e animacoes em **um unico** arquivo GLB.
+
+    E o modo natural para um personagem: corpo, rosto, cabelo e arma costumam
+    estar em `.p3m` separados e pertencem ao mesmo boneco, entao um arquivo com
+    tudo dentro e mais util que um arquivo por peca.
+
+    Os modelos sao agrupados por esqueleto (ver `skeleton_signature`). Cada grupo
+    vira uma `skin` dentro do mesmo GLB — o glTF permite varias —, o que mantem
+    correto o caso em que a selecao mistura personagens diferentes, em vez de
+    deformar a malha por forçar um esqueleto so.
+
+    Cada animacao entra no grupo cujo numero de ossos ela usa. Se nenhum grupo
+    casar, entra no grupo com mais ossos, com aviso: assim a animacao nunca e
+    descartada em silencio.
+    """
+    options = options or ConvertOptions()
+    result = ConvertResult(
+        source=(
+            f"{len(model_paths)} modelo(s) + {len(animation_paths)} animacao(oes)"
+        ),
+        direction=Direction.TO_GLTF,
+    )
+
+    try:
+        if not model_paths:
+            raise ValueError(
+                "nada para juntar: e preciso pelo menos um modelo .p3m"
+            )
+
+        # Uma cena por modelo, agrupadas por esqueleto.
+        groups: dict[tuple, Scene] = {}
+        order: list[tuple] = []
+        fixed_normals = 0
+        for model_path in model_paths:
+            scene = build_scene(model_path, (), result.warnings)
+            if not scene.meshes:
+                continue
+
+            texture_png, texture_path = _resolve_texture(
+                model_path, scene, options, result.warnings
+            )
+            for mesh in scene.meshes:
+                mesh.texture_png = texture_png
+                mesh.texture_source = texture_path
+            if texture_path and result.texture_used is None:
+                result.texture_used = texture_path
+
+            if options.normalize_normals:
+                fixed_normals += scene.normalize_normals()
+
+            signature = skeleton_signature(scene)
+            if signature in groups:
+                groups[signature].meshes.extend(scene.meshes)
+            else:
+                groups[signature] = scene
+                order.append(signature)
+
+        if not groups:
+            raise ValueError("nenhum dos modelos informados tem malha")
+        if fixed_normals:
+            result.warnings.append(
+                f"{fixed_normals} normal(is) nao unitaria(s) normalizada(s)"
+            )
+
+        # Distribui as animacoes entre os grupos, pelo numero de ossos.
+        by_bones: dict[int, list[tuple]] = {}
+        for signature in order:
+            by_bones.setdefault(len(groups[signature].skeleton), []).append(signature)
+        largest = max(order, key=lambda s: len(groups[s].skeleton))
+        ambiguous = 0
+
+        for animation_path in animation_paths:
+            try:
+                frm = frm_format.load_frm(animation_path)
+            except (frm_format.InvalidFrmError, OSError) as error:
+                result.warnings.append(
+                    f"{os.path.basename(animation_path)} ignorado: {error}"
+                )
+                continue
+            name = os.path.splitext(os.path.basename(animation_path))[0]
+
+            candidates = by_bones.get(frm.num_bones)
+            if not candidates:
+                target = largest
+                result.warnings.append(
+                    f"{os.path.basename(animation_path)}: nenhum esqueleto do "
+                    f"arquivo tem {frm.num_bones} osso(s); a animacao foi para o "
+                    f"esqueleto de {len(groups[largest].skeleton)} osso(s)"
+                )
+            else:
+                # Cada animacao entra em UM grupo. Coloca-la em todos os que tem
+                # a mesma contagem de ossos criaria varias actions de mesmo nome
+                # no Blender, o que confunde mais do que ajuda; e o FRM pertence a
+                # um personagem, nao a vários.
+                target = candidates[0]
+                if len(candidates) > 1:
+                    ambiguous += 1
+            groups[target].animations.append(frm_format.frm_to_animation(frm, name))
+
+        if ambiguous:
+            result.warnings.append(
+                f"{ambiguous} animacao(oes) serviam a mais de um esqueleto com a "
+                f"mesma contagem de ossos; cada uma foi para o primeiro"
+            )
+
+        scenes = [groups[signature] for signature in order]
+        if len(scenes) > 1:
+            result.warnings.append(
+                f"os modelos usam {len(scenes)} esqueletos diferentes "
+                f"({', '.join(str(len(s.skeleton)) for s in scenes)} ossos); cada "
+                f"um virou uma armature separada dentro do mesmo arquivo"
+            )
+
+        for scene in scenes:
+            scene.to_right_handed()
+
+        data = export_glb(
+            scenes,
+            GlbOptions(
+                double_sided=options.double_sided,
+                alpha_mode=options.alpha_mode,
+                pretty_json=options.pretty_json,
+            ),
+        )
+        _write_file(output_path, data)
+
+        result.ok = True
+        result.outputs = [output_path]
+        result.bytes_written = len(data)
+        result.summary = _merged_summary(scenes)
+    except Exception as error:  # noqa: BLE001
+        _record_failure(result, error)
+
+    return result
+
+
+def _merged_summary(scenes: list[Scene]) -> str:
+    meshes = sum(len(s.meshes) for s in scenes)
+    vertices = sum(s.vertex_count for s in scenes)
+    triangles = sum(s.triangle_count for s in scenes)
+    animations = sum(len(s.animations) for s in scenes)
+    keyframes = sum(len(a.frames) for s in scenes for a in s.animations)
+    parts = [
+        f"{meshes} malha(s)",
+        f"{vertices} vertices",
+        f"{triangles} triangulos",
+        f"{len(scenes)} esqueleto(s)",
+        f"{animations} animacao(oes)",
+    ]
+    if keyframes:
+        parts.append(f"{keyframes} keyframes")
+    return ", ".join(parts)
 
 
 # --------------------------------------------------- P3M/FRM -> GLB (direta)

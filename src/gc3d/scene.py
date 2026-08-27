@@ -92,6 +92,12 @@ class Mesh:
     indices: list[int] = field(default_factory=list)
     #: Nome do arquivo de textura declarado no P3M (frequentemente vazio).
     texture_name: str = ""
+    #: Bytes de um PNG com a textura desta malha, quando ja resolvida.
+    #: Cada malha carrega a sua para que um GLB com varios modelos possa ter uma
+    #: textura por modelo, em vez de uma unica para o arquivo inteiro.
+    texture_png: bytes | None = None
+    #: Caminho de onde a textura veio. Informativo, para relatorio.
+    texture_source: str | None = None
 
     @property
     def triangle_count(self) -> int:

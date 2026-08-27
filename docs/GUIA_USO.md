@@ -77,21 +77,37 @@ python3 -m pip install tkinterdnd2
 Sem ele, a janela funciona exatamente igual, apenas pelos botões — e avisa isso no
 registro ao abrir.
 
-### Muitas animações num único .glb
+### Tudo em um único .glb
 
-Este é o caso normal: um personagem tem um modelo e dezenas de animações, e todas
-vão para o **mesmo** arquivo `.glb`. No Blender cada uma aparece como uma *action*.
+É o comportamento padrão, controlado pela opção **Juntar tudo em um único .glb**.
+Todos os modelos e todas as animações carregados vão para o mesmo arquivo.
 
-O painel **Animações** controla quais entram:
+Faz sentido porque um personagem do Grand Chase costuma vir repartido em vários
+`.p3m` — corpo, rosto, cabelo, arma — que pertencem ao mesmo boneco. Um arquivo com
+tudo dentro é mais útil que um por peça.
 
-| Opção | Quando usar |
-|-------|-------------|
-| **Só as compatíveis com cada modelo** (padrão) | o caso geral; usa o número de ossos como critério |
-| **Todas as animações carregadas em cada modelo** | quando você sabe que as animações pertencem ao modelo apesar da contagem de ossos, ou quer juntar tudo num arquivo de propósito |
+Cada modelo mantém a **sua própria textura**: o `.glb` recebe um material por
+malha. E se os modelos usarem esqueletos diferentes, cada um vira uma **armature
+separada dentro do mesmo arquivo** — o glTF permite isso, e é o único jeito
+correto, porque forçar um esqueleto só misturaria bind poses e deformaria a malha.
 
-Se nenhuma animação casar, o registro **diz o motivo**: quantos ossos o modelo
-tem, quantos as animações têm, e que a verificação pode ser desligada. Foi testado
-com 68 animações e 4.081 keyframes num único arquivo.
+Desmarque a opção para gerar um `.glb` por modelo.
+
+Testado com 83 modelos, 17 esqueletos, 30.157 vértices, 81 texturas e 68 animações
+num único arquivo, importado no Blender sem nenhum vértice sem peso.
+
+### Animações
+
+**Todas as animações carregadas são sempre incluídas.** O número de ossos não é
+usado como filtro por padrão, porque é um critério grosseiro: nos 127 modelos do
+conjunto de teste há 18 esqueletos distintos, sete deles com exatamente 15 ossos.
+
+No modo unificado, cada animação vai para o esqueleto cuja contagem de ossos ela
+usa. Se nenhum casar, vai para o maior, com aviso no registro. Nenhuma animação é
+descartada em silêncio.
+
+Na linha de comando, `--match-bones` restringe às animações com o mesmo número de
+ossos do modelo.
 
 ### A opção de textura
 
@@ -142,7 +158,7 @@ conferir o que o Blender realmente exportou antes de converter.
 # extrair do jogo
 python3 gc3d_cli.py convert abta003.p3m -o saida/
 python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
-python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ --all-anims -o saida/
+python3 gc3d_cli.py convert corpo.p3m rosto.p3m arma.p3m --merge -o saida/
 python3 gc3d_cli.py convert abta003.p3m -a andar.frm -a pular.frm -o saida/
 python3 gc3d_cli.py convert abta003.p3m -o modelos/elesis.glb
 python3 gc3d_cli.py convert abta003.p3m -o saida/ --texture-dir texturas/
@@ -173,7 +189,8 @@ python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 | `-o`, `--output` | arquivo `.glb` ou pasta de destino |
 | `-a`, `--anim` | uma animação a incluir; pode repetir |
 | `--anim-dir` | inclui as animações compatíveis da pasta |
-| `--all-anims` | inclui **todas** as animações, sem exigir o mesmo número de ossos |
+| `--merge` | junta tudo em um único `.glb` |
+| `--match-bones` | inclui só as animações com o mesmo número de ossos |
 | `--texture` | usa esta textura específica |
 | `--texture-dir` | pasta extra onde procurar; pode repetir |
 | `--no-texture` | não procura, embute nem extrai textura |
@@ -309,14 +326,16 @@ Rode com `-v` para ver o que aconteceu na busca.
 Provavelmente back-face culling. Não use `--single-sided`. No Blender, verifique
 `Material Properties → Settings → Backface Culling` desmarcado.
 
-### "nenhuma das N animações carregadas casa com este modelo"
+### "os modelos usam N esqueletos diferentes"
 
-O modelo e as animações têm números de ossos diferentes, então pertencem a
-esqueletos diferentes. O aviso mostra os dois números.
+Aviso normal ao juntar modelos de personagens diferentes num arquivo. Cada
+esqueleto vira uma armature separada dentro do mesmo `.glb`. Se você esperava um
+esqueleto só, é sinal de que a seleção tem peças de mais de um personagem.
 
-Se você tem certeza de que as animações são desse modelo, ligue **Incluir todas as
-animações** na janela, ou use `--all-anims` na linha de comando. Os ossos
-excedentes são ignorados, e o conversor avisa quantos.
+### "nenhum esqueleto do arquivo tem N osso(s)"
+
+A animação não corresponde a nenhum dos esqueletos do arquivo. Ela foi incluída no
+maior, para não ser perdida, mas provavelmente pertence a outro personagem.
 
 ### A animação não aparece
 

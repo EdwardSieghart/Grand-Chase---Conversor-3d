@@ -45,6 +45,7 @@ from gc3d import (  # noqa: E402
     __version__,
     classify_path,
     collect_inputs,
+    convert_merged,
     convert_model,
     convert_to_gc,
 )
@@ -64,6 +65,28 @@ except Exception:  # noqa: BLE001 - qualquer falha de carga desativa o recurso
     DND_AVAILABLE = False
 
 APP_TITLE = f"Grand Chase 3D Importer {__version__}"
+
+
+def _merged_output_name(model_paths: list[str]) -> str:
+    """Nome do arquivo unico ao juntar varios modelos.
+
+    Com um modelo, usa o nome dele. Com varios, usa o prefixo comum quando
+    existir (`abta000`, `abta001` -> `abta00.glb`), porque as pecas de um mesmo
+    personagem tendem a compartilhar prefixo. Sem prefixo util, cai no nome da
+    pasta de origem, e por fim num nome fixo.
+    """
+    stems = [os.path.splitext(os.path.basename(p))[0] for p in model_paths]
+    if len(stems) == 1:
+        return stems[0] + ".glb"
+
+    common = os.path.commonprefix(stems).strip(" _-")
+    if len(common) >= 3:
+        return common + ".glb"
+
+    folder = os.path.basename(os.path.dirname(os.path.abspath(model_paths[0])))
+    if folder:
+        return folder + ".glb"
+    return "modelo_completo.glb"
 
 
 class Dark:
@@ -246,8 +269,10 @@ class ConverterApp(ttk.Frame):
         self.status = tk.StringVar(value="Pronto.")
         self.progress_value = tk.DoubleVar(value=0.0)
         self.with_texture = tk.BooleanVar(value=True)
-        #: Casar animacoes por numero de ossos. Desligado, todas vao em todos.
-        self.match_by_bones = tk.BooleanVar(value=True)
+        #: Juntar todos os modelos e animacoes num unico .glb. Ligado por padrao:
+        #: um personagem costuma vir em varios .p3m (corpo, rosto, arma) e um
+        #: arquivo com tudo dentro e mais util que um arquivo por peca.
+        self.merge_all = tk.BooleanVar(value=True)
 
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
@@ -265,7 +290,7 @@ class ConverterApp(ttk.Frame):
         self.columnconfigure(0, weight=1)
         # A lista e o registro sao os unicos que crescem com a janela.
         self.rowconfigure(2, weight=3)
-        self.rowconfigure(6, weight=2)
+        self.rowconfigure(5, weight=2)
 
         # ---- cabecalho
         header = ttk.Frame(self)
@@ -364,37 +389,17 @@ class ConverterApp(ttk.Frame):
             text="Incluir textura (embutir no .glb, ou extrair como .png)",
             variable=self.with_texture,
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
-
-        # ---- animacoes
-        self.animation_frame = ttk.LabelFrame(
-            self, text="Animações (ao gerar .glb)", padding=10
+        self.merge_check = ttk.Checkbutton(
+            output,
+            text="Juntar tudo em um único .glb (modelos e animações)",
+            variable=self.merge_all,
+            command=self._refresh_direction,
         )
-        self.animation_frame.grid(row=5, column=0, sticky="ew", pady=(12, 0))
-        self.animation_frame.columnconfigure(0, weight=1)
-        ttk.Radiobutton(
-            self.animation_frame,
-            text="Incluir só as animações compatíveis com cada modelo "
-            "(mesmo número de ossos)",
-            variable=self.match_by_bones,
-            value=True,
-            command=self._refresh_direction,
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(
-            self.animation_frame,
-            text="Incluir todas as animações carregadas em cada modelo",
-            variable=self.match_by_bones,
-            value=False,
-            command=self._refresh_direction,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Label(
-            self.animation_frame,
-            text="Todas as animações incluídas vão juntas em um único .glb por modelo.",
-            style="Muted.TLabel",
-        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.merge_check.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         # ---- registro
         log_frame = ttk.LabelFrame(self, text="Registro", padding=(2, 6, 2, 2))
-        log_frame.grid(row=6, column=0, sticky="nsew", pady=(12, 0))
+        log_frame.grid(row=5, column=0, sticky="nsew", pady=(12, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -426,7 +431,7 @@ class ConverterApp(ttk.Frame):
 
         # ---- rodape
         footer = ttk.Frame(self)
-        footer.grid(row=7, column=0, sticky="ew", pady=(12, 0))
+        footer.grid(row=6, column=0, sticky="ew", pady=(12, 0))
         footer.columnconfigure(2, weight=1)
 
         self.convert_button = ttk.Button(
@@ -573,14 +578,16 @@ class ConverterApp(ttk.Frame):
             )
         else:
             if models:
-                if animations and not self.match_by_bones.get():
-                    modo = f"todas as {animations} em cada modelo"
-                elif animations:
-                    modo = f"{animations} animacao(oes), casadas por ossos"
+                animacao_txt = (
+                    f"{animations} animacao(oes)" if animations else "sem animacoes"
+                )
+                if self.merge_all.get():
+                    destino = "um unico .glb"
                 else:
-                    modo = "sem animacoes"
+                    destino = f"{models} arquivo(s) .glb"
                 self.direction_text.set(
-                    f"P3M + FRM -> GLB     {models} modelo(s), {modo}"
+                    f"P3M + FRM -> GLB     {models} modelo(s), {animacao_txt}"
+                    f"  ->  {destino}"
                 )
             else:
                 self.direction_text.set(
@@ -728,7 +735,6 @@ class ConverterApp(ttk.Frame):
         options = ConvertOptions(
             embed_texture=self.with_texture.get(),
             extract_texture=self.with_texture.get(),
-            match_animations_by_bones=self.match_by_bones.get(),
             texture_dirs=sorted(
                 {os.path.dirname(os.path.abspath(p)) for p in self.paths}
             ),
@@ -739,13 +745,12 @@ class ConverterApp(ttk.Frame):
         self.cancel_button.configure(state="normal")
         self.progress_value.set(0.0)
         self._log("")
-        self._log(
-            f"{Direction.LABELS[direction]}  ->  {output_dir}", "muted"
-        )
+        self._log(f"{Direction.LABELS[direction]}  ->  {output_dir}", "muted")
 
+        merge = direction == Direction.TO_GLTF and self.merge_all.get()
         self._worker = threading.Thread(
             target=self._run,
-            args=(direction, models, animations, gltfs, output_dir, options),
+            args=(direction, models, animations, gltfs, output_dir, options, merge),
             daemon=True,
         )
         self._worker.start()
@@ -762,8 +767,32 @@ class ConverterApp(ttk.Frame):
         gltfs: list[str],
         output_dir: str,
         options: ConvertOptions,
+        merge: bool = False,
     ) -> None:
         """Roda na thread de trabalho. Comunica-se apenas pela fila."""
+        # Modo "tudo em um arquivo": um unico trabalho, um unico GLB.
+        if merge:
+            self._queue.put(("progress", 10.0))
+            self._queue.put(
+                ("status", f"Juntando {len(models)} modelo(s) em um .glb...")
+            )
+            name = _merged_output_name(models)
+            output_path = os.path.join(output_dir, name)
+            result = convert_merged(models, animations, output_path, options)
+            self._queue.put(("progress", 100.0))
+            if result.ok:
+                self._queue.put(
+                    ("log", (f"[ok] {len(models)} modelo(s) -> {name}", "ok"))
+                )
+                self._queue.put(("log", (f"     {result.summary}", "muted")))
+                for warning in result.warnings:
+                    self._queue.put(("log", (f"     aviso: {warning}", "aviso")))
+                self._queue.put(("done", (1, 1)))
+            else:
+                self._queue.put(("log", (f"[ERRO] {result.error}", "erro")))
+                self._queue.put(("done", (0, 1)))
+            return
+
         items = gltfs if direction == Direction.TO_GC else models
         total = len(items)
         succeeded = 0

@@ -44,7 +44,13 @@ def check(path: str) -> dict:
     except Exception as error:  # noqa: BLE001
         return {"ok": False, "file": os.path.basename(path), "error": str(error)}
 
-    imported = [o for o in bpy.data.objects if o.name not in before]
+    # O importador deixa selecionados exatamente os objetos que criou. Isso e
+    # mais confiavel que comparar o conjunto de objetos antes e depois: a cena
+    # inicial do Blender reaparece durante o import (um "Icosphere" em 5.2), e a
+    # diferenca contaria esse objeto como importado.
+    imported = [o for o in bpy.context.selected_objects]
+    if not imported:
+        imported = [o for o in bpy.data.objects if o.name not in before]
     meshes = [o for o in imported if o.type == "MESH"]
     armatures = [o for o in imported if o.type == "ARMATURE"]
 

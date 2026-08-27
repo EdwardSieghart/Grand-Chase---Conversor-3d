@@ -21,7 +21,7 @@ O pacote nao tem nenhuma dependencia fora da biblioteca padrao do Python.
 
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __all__ = [
     "__version__",
     "ConvertOptions",
@@ -32,6 +32,8 @@ __all__ = [
     "convert_model",
     "convert_to_gc",
     "convert_batch",
+    "convert_merged",
+    "skeleton_signature",
     "collect_inputs",
     "detect_direction",
     "classify_path",
@@ -54,9 +56,11 @@ from .convert import (
     classify_path,
     collect_inputs,
     convert_batch,
+    convert_merged,
     convert_model,
     convert_to_gc,
     detect_direction,
+    skeleton_signature,
     find_animations_for_model,
 )
 from .scene import (

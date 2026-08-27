@@ -4,7 +4,7 @@ Arquivo de contexto para quem for continuar este trabalho — pessoa ou assisten
 de IA. Reúne o estado atual, as decisões já tomadas (com o motivo), o que foi
 verificado e onde estão as fontes, para não ser necessário refazer a investigação.
 
-Versão 1.2.0. Última atualização: 2026-08-26.
+Versão 1.3.0. Última atualização: 2026-08-26.
 
 ---
 
@@ -45,8 +45,10 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | CLI | `info`, `convert`, `batch`, nos dois sentidos |
 | GUI | tela única, tema escuro, direção automática, limpa a lista ao fim |
 | Arrastar e soltar | via `tkinterdnd2`, **opcional** em runtime e embutido nos executáveis |
-| Muitas animações num só GLB | suportado; painel na GUI e `--all-anims` na CLI |
-| Testes | 147, só com a biblioteca padrão |
+| Muitas animações num só GLB | suportado; testado com 68 |
+| Vários modelos num só GLB | suportado, com uma `skin` por esqueleto; `--merge` na CLI, padrão na GUI |
+| Textura por malha | suportado; um material por malha no GLB |
+| Testes | 168, só com a biblioteca padrão |
 | Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
 | Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
 | Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
@@ -240,6 +242,11 @@ errada e o personagem anima ao contrário. Há um teste específico
 | `tkinterdnd2` opcional em runtime, embutido no build | tkinter não tem drag and drop; assim o usuário final ganha o recurso sem quebrar a regra de zero dependências para rodar |
 | `AnimationIndex` compartilhado entre CLI e GUI | lê cada `.frm` uma vez e garante que as duas interfaces selecionem igual |
 | Avisar quando nenhuma animação casa | antes era silencioso e parecia que o programa não suportava várias animações |
+| Incluir todas as animações por padrão | a contagem de ossos é filtro grosseiro (7 esqueletos distintos com 15 ossos); descartar em silêncio parece defeito |
+| Juntar num GLB só por padrão na GUI | um personagem vem em vários `.p3m`; um arquivo com tudo é mais útil |
+| Agrupar por assinatura de esqueleto, não por contagem de ossos | há 18 esqueletos nos 127 modelos, 7 deles com 15 ossos; forçar um esqueleto só deformaria a malha |
+| Uma `skin` por esqueleto dentro do mesmo GLB | o glTF permite várias; é o único jeito correto de ter tudo num arquivo |
+| Animação vai para **um** grupo, não para todos os compatíveis | duplicar geraria várias actions de mesmo nome no Blender |
 
 ---
 
@@ -294,6 +301,14 @@ De ferramental:
     Chamar só `_refresh_direction()` deixava a dica de arrastar invisível ao abrir.
 20. **`spectacle -a` captura a janela ativa, que pode não ser a do programa.** Para
     conferir a interface por screenshot, use `import -window "<titulo da janela>"`.
+21. **Contagem de ossos NÃO identifica um esqueleto.** Nos 127 modelos há 18
+    esqueletos distintos, sete deles com exatamente 15 ossos. Agrupar por contagem
+    misturaria bind poses. Use `skeleton_signature` (translações + hierarquia).
+22. **O índice de malha do nó tem de ser previsto antes de a malha existir.** Os
+    nós são criados antes dos acessores; um contador corrido entre grupos resolve.
+23. **`bpy.ops.import_scene.gltf` deixa os objetos importados selecionados.** Usar
+    `bpy.context.selected_objects` é mais confiável que diferença de conjuntos: a
+    cena inicial do Blender reaparece durante o import.
 
 ---
 

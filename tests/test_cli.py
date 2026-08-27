@@ -116,8 +116,8 @@ class TestCliConvert(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("serao incluidas", result.stdout)
 
-    def test_all_anims_ignores_bone_matching(self) -> None:
-        """`--all-anims` deve incluir mais animacoes que o casamento por ossos."""
+    def test_default_includes_all_animations(self) -> None:
+        """O padrao e incluir todas; `--match-bones` restringe por ossos."""
         if not os.path.isdir(SAMPLES_FRM):
             self.skipTest("samples/frm ausente")
 
@@ -126,17 +126,49 @@ class TestCliConvert(unittest.TestCase):
             return int(saida.split(" de ", 1)[0].strip())
 
         with tempfile.TemporaryDirectory() as tmp:
-            casado = run_cli(
+            padrao = run_cli(
                 "convert", self.model, "-o", tmp, "--anim-dir", SAMPLES_FRM,
                 "--no-texture",
             )
-            todas = run_cli(
+            restrito = run_cli(
                 "convert", self.model, "-o", tmp, "--anim-dir", SAMPLES_FRM,
-                "--all-anims", "--no-texture",
+                "--match-bones", "--no-texture",
             )
-        self.assertEqual(casado.returncode, 0, casado.stderr)
-        self.assertEqual(todas.returncode, 0, todas.stderr)
-        self.assertGreater(contagem(todas.stdout), contagem(casado.stdout))
+        self.assertEqual(padrao.returncode, 0, padrao.stderr)
+        self.assertEqual(restrito.returncode, 0, restrito.stderr)
+        self.assertGreater(
+            contagem(padrao.stdout),
+            contagem(restrito.stdout),
+            "sem --match-bones deve incluir mais animacoes",
+        )
+
+    def test_merge_produces_single_file(self) -> None:
+        """`--merge` junta varios modelos num unico .glb."""
+        models = [
+            os.path.join(SAMPLES_P3M, name)
+            for name in sorted(os.listdir(SAMPLES_P3M))
+            if name.lower().endswith(".p3m")
+        ][:3]
+        if len(models) < 2:
+            self.skipTest("precisa de pelo menos duas amostras .p3m")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("convert", *models, "--merge", "-o", tmp, "--no-texture")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            produced = [n for n in os.listdir(tmp) if n.endswith(".glb")]
+            self.assertEqual(len(produced), 1, f"esperava um arquivo, veio {produced}")
+
+    def test_several_models_without_merge_explains(self) -> None:
+        models = [
+            os.path.join(SAMPLES_P3M, name)
+            for name in sorted(os.listdir(SAMPLES_P3M))
+            if name.lower().endswith(".p3m")
+        ][:2]
+        if len(models) < 2:
+            self.skipTest("precisa de pelo menos duas amostras .p3m")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("convert", *models, "-o", tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--merge", result.stderr)
 
     def test_convert_nonexistent_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
