@@ -113,11 +113,23 @@ ossos do modelo.
 
 **Incluir textura** faz duas coisas diferentes conforme o sentido:
 
-- indo para `.glb`: procura a textura e a embute dentro do arquivo. A busca usa o
-  nome declarado dentro do `.p3m` (quando utilizável) e o nome do próprio modelo
-  (`abta003.p3m` → `abta003.dds`), na pasta de cada modelo.
-- voltando para `.p3m`: extrai a textura embutida no glTF como `.png` ao lado do
-  modelo.
+- indo para `.glb`: procura a textura e a embute dentro do arquivo;
+- voltando para `.p3m`: grava a textura ao lado do modelo, em `.dds`.
+
+A busca da textura tenta, nesta ordem:
+
+1. o nome declarado dentro do `.p3m`, quando utilizável;
+2. o nome do próprio modelo (`abta003.p3m` → `abta003.dds`) — resolve 119 dos 127
+   modelos de teste;
+3. o nome sem o último trecho `_algo` (`abta93827_m` → `abta93827.dds`);
+4. qualquer imagem com o mesmo prefixo (`face_04_00` → `face_04_hited_01.dds`).
+
+Os dois primeiros são exatos. Os dois últimos são aproximações, e o registro avisa
+quando foram usados, dizendo quantas alternativas existem. Com essas regras, os
+127 modelos de teste encontram textura.
+
+A busca é feita na pasta de cada modelo. Use `--texture-dir` na linha de comando
+para procurar em outras.
 
 ---
 
@@ -194,6 +206,7 @@ python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 | `--texture` | usa esta textura específica |
 | `--texture-dir` | pasta extra onde procurar; pode repetir |
 | `--no-texture` | não procura, embute nem extrai textura |
+| `--texture-format` | `dds` (padrão) ou `png` na volta para o jogo |
 | `--no-animations` | ao voltar para o jogo, não gera os `.frm` |
 | `--single-sided` | material de um lado só |
 | `--alpha-mode` | `OPAQUE`, `MASK` ou `BLEND` (padrão: automático) |
@@ -291,8 +304,24 @@ animar no FPS que preferir — mas veja a ressalva sobre quantização acima.
 
 ### Sobre a textura
 
-Ela volta como `.png`, não como `.dds`. Se o alvo exigir DDS, converta com o GIMP
-(com plugin DDS), o Paint.NET ou o `texconv` da Microsoft.
+Ela volta como **`.dds`**, o formato que o jogo lê — não é preciso converter nada.
+
+O arquivo sai **sem compressão**: 24 bits quando a imagem é opaca, 32 bits quando
+tem transparência, com as mesmas máscaras de canal dos arquivos originais do jogo.
+Escolhi assim porque das 406 texturas do Grand Chase analisadas, 281 já são sem
+compressão, então o formato é comprovadamente aceito, e a gravação não perde
+nenhum pixel.
+
+O único custo é tamanho em disco: uma textura de 128×128 ocupa 49 KB em vez dos
+8 KB de um DXT1. Se isso importar, recomprima com o `texconv` da Microsoft, o GIMP
+com plugin DDS ou o Paint.NET.
+
+Use `--texture-format png` se preferir PNG (por exemplo para editar a textura
+antes).
+
+Se o glTF tiver **mais de uma textura**, o conversor usa a da primeira malha e
+avisa — o P3M v0.5 guarda apenas uma. Se a textura estiver em JPEG, o arquivo é
+gravado como está, com aviso, porque este conversor não decodifica JPEG.
 
 ---
 
@@ -315,11 +344,18 @@ Em ordem de probabilidade:
 
 1. **O `.dds` não está junto do `.p3m`.** Use `--texture-dir`, ou copie os
    arquivos para a mesma pasta.
-2. **O nome não corresponde.** O conversor procura `<nome do modelo>.dds`. Se a
-   textura tem outro nome, indique com `--texture arquivo.dds`.
-3. **No Blender, o viewport está em modo Solid.** Mude para *Material Preview*.
+2. **No Blender, o viewport está em modo Solid.** Mude para *Material Preview*.
+3. **O nome não corresponde a nenhuma das regras.** Indique com
+   `--texture arquivo.dds`.
 
 Rode com `-v` para ver o que aconteceu na busca.
+
+### "usando <arquivo> por semelhança de nome"
+
+Não existe textura com o nome exato do modelo, então o conversor pegou uma com o
+mesmo prefixo. Acontece com os rostos do jogo, que têm uma textura por expressão e
+nem sempre a `_00`. O aviso diz quantas alternativas existem; se a escolhida não
+for a certa, use `--texture` para indicar.
 
 ### O modelo aparece com partes faltando ou invertidas
 

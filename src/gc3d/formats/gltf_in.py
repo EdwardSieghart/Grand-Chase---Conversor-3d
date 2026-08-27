@@ -60,6 +60,8 @@ __all__ = [
     "load_gltf",
     "gltf_to_scene",
     "extract_base_color_png",
+    "extract_base_color_texture",
+    "base_color_image_indices",
 ]
 
 _GLB_MAGIC = 0x46546C67
@@ -1051,51 +1053,136 @@ def _root_world_offset(
     return _world_translation(root_node, document.nodes, parents)
 
 
-def extract_base_color_png(document: GltfDocument) -> bytes | None:
-    """Devolve os bytes da textura base color, se ela for PNG embutido.
+def _image_bytes(document: GltfDocument, image_index: int) -> tuple[bytes | None, str]:
+    """Devolve `(dados, mimeType)` de uma imagem do glTF.
 
-    Serve para gravar a textura ao lado do P3M na conversao inversa. JPEG e
-    imagens em arquivo externo sao devolvidas como `None` porque nao ha
-    codificador de JPEG aqui e o objetivo e apenas conveniencia.
+    A imagem pode estar num bufferView, num `data:` URI ou num arquivo ao lado.
+    O mimeType volta em minusculas, ou vazio se nao declarado.
     """
-    materials = document.json.get("materials") or []
-    textures = document.json.get("textures") or []
     images = document.json.get("images") or []
-    if not materials or not textures or not images:
-        return None
-
-    pbr = materials[0].get("pbrMetallicRoughness") or {}
-    texture_info = pbr.get("baseColorTexture")
-    if not texture_info:
-        return None
-    texture_index = texture_info.get("index", 0)
-    if texture_index >= len(textures):
-        return None
-    image_index = textures[texture_index].get("source")
-    if image_index is None or image_index >= len(images):
-        return None
-
+    if image_index >= len(images):
+        return None, ""
     image = images[image_index]
-    if image.get("mimeType") not in (None, "image/png"):
-        return None
+    mime = (image.get("mimeType") or "").lower()
 
     if "bufferView" in image:
         view = document.buffer_views[image["bufferView"]]
         data = document.buffers[view.get("buffer", 0)]
         start = view.get("byteOffset", 0)
-        raw = data[start : start + view["byteLength"]]
-        return raw if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
+        return data[start : start + view["byteLength"]], mime
 
     uri = image.get("uri")
     if not uri:
-        return None
+        return None, mime
     if uri.startswith("data:"):
-        raw = _decode_data_uri(uri)
-        return raw if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
+        return _decode_data_uri(uri), mime
 
     path = os.path.join(document.base_dir, _unquote_uri(uri))
     if os.path.isfile(path):
         with open(path, "rb") as handle:
-            raw = handle.read()
-        return raw if raw[:8] == b"\x89PNG\r\n\x1a\n" else None
+            return handle.read(), mime or _mime_from_extension(path)
+    return None, mime
+
+
+def _mime_from_extension(path: str) -> str:
+    extension = os.path.splitext(path)[1].lower()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(extension, "")
+
+
+def base_color_image_indices(document: GltfDocument) -> list[int]:
+    """Indices das imagens usadas como base color, em ordem de material.
+
+    Serve para saber quantas texturas distintas o arquivo tem: o P3M v0.5 guarda
+    apenas uma, e o usuario precisa ser avisado quando ha mais.
+    """
+    materials = document.json.get("materials") or []
+    textures = document.json.get("textures") or []
+    found: list[int] = []
+    for material in materials:
+        info = (material.get("pbrMetallicRoughness") or {}).get("baseColorTexture")
+        if not info:
+            continue
+        texture_index = info.get("index", 0)
+        if texture_index >= len(textures):
+            continue
+        source = textures[texture_index].get("source")
+        if source is not None and source not in found:
+            found.append(source)
+    return found
+
+
+def first_primitive_material(document: GltfDocument) -> int | None:
+    """Material da primeira primitiva com geometria.
+
+    E o material que corresponde a primeira malha do arquivo, e portanto o mais
+    representativo quando o P3M so pode ter uma textura. Pegar `materials[0]` as
+    cegas pode escolher o material de outra malha.
+    """
+    for mesh in document.meshes:
+        for primitive in mesh.get("primitives") or []:
+            if "POSITION" in (primitive.get("attributes") or {}):
+                return primitive.get("material")
+    return None
+
+
+def extract_base_color_texture(
+    document: GltfDocument,
+) -> tuple[bytes | None, str, list[str]]:
+    """Extrai a textura base color mais representativa do glTF.
+
+    Devolve `(dados, mimeType, avisos)`. Os dados vem como estao no arquivo (PNG
+    ou JPEG); quem chama decide o que fazer. Avisa quando o glTF tem mais de uma
+    textura, porque o P3M v0.5 guarda apenas uma.
+    """
+    warnings: list[str] = []
+    materials = document.json.get("materials") or []
+    textures = document.json.get("textures") or []
+    if not materials or not textures:
+        return None, "", warnings
+
+    all_images = base_color_image_indices(document)
+    if len(all_images) > 1:
+        warnings.append(
+            f"o glTF tem {len(all_images)} texturas base color e o P3M v0.5 guarda "
+            f"apenas uma; sera usada a da primeira malha"
+        )
+
+    material_index = first_primitive_material(document)
+    if material_index is None or material_index >= len(materials):
+        material_index = 0
+
+    info = (
+        (materials[material_index].get("pbrMetallicRoughness") or {})
+        .get("baseColorTexture")
+    )
+    if not info:
+        # A primeira malha nao tem textura, mas outra pode ter.
+        if all_images:
+            return _image_bytes(document, all_images[0]) + (warnings,)
+        return None, "", warnings
+
+    texture_index = info.get("index", 0)
+    if texture_index >= len(textures):
+        return None, "", warnings
+    source = textures[texture_index].get("source")
+    if source is None:
+        return None, "", warnings
+
+    data, mime = _image_bytes(document, source)
+    return data, mime, warnings
+
+
+def extract_base_color_png(document: GltfDocument) -> bytes | None:
+    """Versao simples: devolve os bytes so quando a textura ja e PNG."""
+    data, mime, _ = extract_base_color_texture(document)
+    if data is None:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    if mime == "image/png":
+        return data
     return None

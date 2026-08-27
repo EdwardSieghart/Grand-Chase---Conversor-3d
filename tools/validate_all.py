@@ -122,12 +122,11 @@ def check_dds(paths: list[str], cross_check: bool) -> tuple[int, list[str], dict
     reference = None
     if cross_check:
         try:
-            import numpy  # noqa: F401
             from PIL import Image  # noqa: F401
 
             reference = True
         except ImportError:
-            print("  (Pillow/numpy ausentes: comparacao cruzada desativada)")
+            print("  (Pillow ausente: comparacao cruzada desativada)")
 
     for path in paths:
         try:
@@ -143,7 +142,6 @@ def check_dds(paths: list[str], cross_check: bool) -> tuple[int, list[str], dict
         stats["formats"][image.source_format] += 1
 
         if reference:
-            import numpy as np
             from PIL import Image
 
             try:
@@ -156,11 +154,67 @@ def check_dds(paths: list[str], cross_check: bool) -> tuple[int, list[str], dict
                     f"{(image.width, image.height)} != {expected.size} (Pillow)"
                 )
                 continue
-            mine = np.frombuffer(bytes(image.pixels), dtype=np.uint8).astype(np.int16)
-            theirs = np.asarray(expected, dtype=np.int16).reshape(-1)
-            worst = int(np.abs(mine - theirs).max())
+            mine = bytes(image.pixels)
+            theirs = expected.tobytes()
             stats["compared"] += 1
-            stats["worst_error"] = max(stats["worst_error"], worst)
+            # Comparar os bytes de uma vez e ordens de magnitude mais rapido que
+            # percorrer canal por canal; so entra no caminho lento se diferir.
+            if mine != theirs:
+                worst = max(abs(a - b) for a, b in zip(mine, theirs))
+                stats["worst_error"] = max(stats["worst_error"], worst)
+    return ok, failures, stats
+
+
+def check_dds_writing(paths: list[str]) -> tuple[int, list[str], dict]:
+    """Confere que o DDS gravado por nos reproduz os pixels de origem.
+
+    Testa os dois caminhos que a conversao inversa usa:
+    `DDS -> RGBA -> nosso DDS` e `DDS -> PNG -> RGBA -> nosso DDS`. O segundo e o
+    real, porque a textura chega dentro do glTF como PNG.
+    """
+    from gc3d.textures import encode_png, read_png, write_dds
+
+    ok = 0
+    failures: list[str] = []
+    stats: dict = {"formats": collections.Counter()}
+    for path in paths:
+        try:
+            with open(path, "rb") as handle:
+                original = read_dds(handle.read())
+            source = bytes(original.pixels)
+
+            direct = read_dds(
+                write_dds(original.width, original.height, source, None)
+            )
+            through_png = read_png(
+                encode_png(original.width, original.height, source)
+            )
+            via_png = read_dds(
+                write_dds(
+                    through_png.width,
+                    through_png.height,
+                    bytes(through_png.pixels),
+                    None,
+                )
+            )
+        except Exception as error:  # noqa: BLE001
+            failures.append(
+                f"{os.path.basename(path)}: {type(error).__name__}: {error}"
+            )
+            continue
+
+        stats["formats"][f"{original.source_format} -> {direct.source_format}"] += 1
+        if bytes(direct.pixels) != source:
+            failures.append(
+                f"{os.path.basename(path)}: regravar o DDS alterou pixels"
+            )
+            continue
+        if bytes(via_png.pixels) != source:
+            failures.append(
+                f"{os.path.basename(path)}: o caminho DDS -> PNG -> DDS alterou pixels"
+            )
+            continue
+        ok += 1
     return ok, failures, stats
 
 
@@ -209,7 +263,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--cross-check",
         action="store_true",
-        help="compara o decodificador de DDS com o Pillow (requer Pillow e numpy)",
+        help="compara o decodificador de DDS com o Pillow (requer Pillow)",
     )
     parser.add_argument(
         "--out-dir",
@@ -257,7 +311,14 @@ def main(argv: list[str]) -> int:
         print(f"erro maximo por canal: {stats['worst_error']}")
     all_failures += failures
 
-    section("4. Conversao para GLB e validacao estrutural")
+    section("4. Escrita de DDS sem compressao")
+    ok, failures, stats = check_dds_writing(files["dds"])
+    print(f"regravados sem perda: {ok}/{len(files['dds'])}")
+    for key, value in stats["formats"].most_common(8):
+        print(f"  {key}: {value}")
+    all_failures += failures
+
+    section("5. Conversao para GLB e validacao estrutural")
     ok, failures, stats = check_conversion(files["p3m"], args.out_dir)
     print(f"convertidos: {ok}/{len(files['p3m'])}")
     print(f"GLB com problema estrutural: {stats['invalid_glb']}")

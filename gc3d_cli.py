@@ -94,6 +94,7 @@ def _options_from_args(args: argparse.Namespace) -> ConvertOptions:
         pretty_json=args.pretty_json,
         export_animations=not args.no_animations,
         extract_texture=not args.no_texture,
+        texture_format=args.texture_format,
         match_animations_by_bones=args.match_bones,
     )
 
@@ -316,8 +317,11 @@ def cmd_batch(args: argparse.Namespace) -> int:
 
     failures = [r for r in results if not r.ok]
     if not args.quiet:
-        for result in failures:
-            _print_result(result, args.verbose, args.quiet)
+        for result in results:
+            # Em modo verboso mostra tudo; sem ele, apenas as falhas. Antes os
+            # avisos dos arquivos que deram certo ficavam invisiveis no lote.
+            if args.verbose or not result.ok:
+                _print_result(result, args.verbose, args.quiet)
         total_bytes = sum(r.bytes_written for r in results)
         total_files = sum(len(r.outputs) for r in results)
         print()
@@ -497,6 +501,15 @@ def build_parser() -> argparse.ArgumentParser:
             help=(
                 "inclui apenas as animacoes com o mesmo numero de ossos do "
                 "modelo (o padrao e incluir todas)"
+            ),
+        )
+        sub.add_argument(
+            "--texture-format",
+            choices=("dds", "png"),
+            default="dds",
+            help=(
+                "formato da textura extraida ao converter glTF de volta; dds e o "
+                "que o jogo le (padrao)"
             ),
         )
         sub.add_argument(

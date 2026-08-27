@@ -102,7 +102,7 @@ teste de escrita não precisa mexer com bytes.
 | `binary.py` | Cursor de bytes little-endian, erros de truncamento com offset | P3M, FRM, glTF |
 | `mathutil.py` | Vetores, matrizes 4×4, quaternions, slerp | formatos de arquivo |
 | `scene.py` | Estruturas neutras e conversão de sistema de coordenadas | formatos de arquivo |
-| `textures.py` | DDS → RGBA → PNG, busca de arquivo de textura | 3D |
+| `textures.py` | DDS e PNG nos dois sentidos, busca de arquivo de textura | 3D |
 | `formats/p3m.py` | Ler e escrever modelos, achatar/reconstruir a hierarquia de ossos | animação, glTF |
 | `formats/frm.py` | Ler e escrever animações | geometria, glTF |
 | `formats/glb.py` | Escrever glTF 2.0 binário | P3M, FRM |
@@ -323,6 +323,58 @@ gruda os vértices no osso errado em qualquer arquivo de outra ferramenta.
 O importador monta `skin_index_to_joint` explicitamente, e há um teste com
 `skin.joints` invertido de propósito para travar esse comportamento.
 
+### Texturas: por que DDS sem compressão
+
+Voltando para o jogo, a textura sai em **DDS sem compressão** — 24 bits quando a
+imagem é opaca, 32 bits quando tem transparência, com as máscaras
+`R=0xFF0000 G=0xFF00 B=0xFF` (ordem de bytes BGR/BGRA).
+
+A escolha veio de medir os arquivos do próprio jogo, não de preferência:
+
+| Formato | Arquivos | Máscaras |
+|---------|----------|----------|
+| 24 bits | 251 | `R=0xFF0000 G=0xFF00 B=0xFF` |
+| DXT1 | 112 | — |
+| 32 bits | 30 | idem + `A=0xFF000000` |
+| DXT5 | 13 | — |
+
+**281 das 406 texturas do jogo já são sem compressão**, então gravar assim é
+comprovadamente aceito e é sem perda. Um compressor DXT seria com perda e traria
+ganho apenas de espaço em disco.
+
+Duas medições guiaram detalhes:
+
+- **326 das 406 texturas não têm mipmaps**, então o escritor também não gera.
+- **Nenhuma das 406 tem transparência real** — mesmo as DXT5 e as de 32 bits são
+  totalmente opacas. Por isso `has_alpha` é decidido pelos pixels, não pelo formato
+  do arquivo: usar o formato faria toda textura opaca virar 32 bits sem necessidade.
+
+Escrever DDS exigiu **decodificar PNG**, porque é assim que a textura chega dentro
+do glTF. O decodificador cobre os cinco tipos de cor, profundidades de 1 a 16 bits
+e `tRNS`, e foi verificado como idêntico ao do Pillow nas 406 texturas. PNG
+entrelaçado é recusado com mensagem clara: nenhum exportador de glTF gera
+entrelaçado.
+
+### Achar a textura de um modelo
+
+O campo `textureName` do P3M vem vazio na maioria dos arquivos oficiais, e às vezes
+com lixo binário. `resolve_texture` tenta quatro estratégias e **informa qual
+funcionou**, para o chamador poder avisar quando o resultado foi um chute:
+
+| Estratégia | Exemplo | Resultado nos 127 modelos |
+|------------|---------|---------------------------|
+| nome declarado no P3M | — | 0 (o campo é sempre inútil na prática) |
+| nome do modelo | `abta003.p3m` → `abta003.dds` | 119 |
+| sem o último trecho `_algo` | `abta93827_m` → `abta93827.dds` | 1 |
+| qualquer imagem com o mesmo prefixo | `face_04_00` → `face_04_hited_01.dds` | 7 |
+
+As duas primeiras são exatas; as duas últimas são aproximações e viram aviso. A
+última existe porque os rostos do jogo têm uma textura por expressão e nem sempre
+existe a `_00` — todas servem à mesma malha e ao mesmo UV, então pegar uma é mais
+útil que não pegar nada, desde que o usuário saiba.
+
+Com essas regras, os 127 modelos de teste encontram textura, contra 119 antes.
+
 ### Perdas inevitáveis, e por que não importam aqui
 
 | Recurso do glTF | O que acontece | Por que é aceitável |
@@ -330,6 +382,8 @@ O importador monta `skin_index_to_joint` explicitamente, e há um teste com
 | Vários ossos por vértice | fica o de maior peso | o P3M v0.5 não tem skinning suave |
 | Várias malhas/primitivas | mescladas em uma | o P3M v0.5 guarda uma malha |
 | Rotação/escala em nó acima dos ossos | perdida, com aviso | o bind pose do P3M é só translação |
+| Mais de uma textura | usa a da primeira malha, com aviso | o P3M v0.5 tem um campo de textura |
+| Textura em JPEG | gravada como está, com aviso | não há decodificador de JPEG aqui |
 | Translação por osso na animação | não gravada | medimos: **zero** das 93.319 matrizes dos 68 FRM oficiais têm translação (99,92% rotação pura, 0,08% zeradas) |
 | Morph targets | ignorados, com aviso | não existem no FRM |
 

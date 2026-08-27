@@ -4,7 +4,7 @@ Arquivo de contexto para quem for continuar este trabalho — pessoa ou assisten
 de IA. Reúne o estado atual, as decisões já tomadas (com o motivo), o que foi
 verificado e onde estão as fontes, para não ser necessário refazer a investigação.
 
-Versão 1.3.0. Última atualização: 2026-08-26.
+Versão 1.4.0. Última atualização: 2026-08-26.
 
 ---
 
@@ -40,7 +40,8 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | glTF 2.0 — escrita (`glb.py`) | validada no Blender, 131/131 |
 | glTF 2.0 — leitura (`gltf_in.py`) | validada com arquivos próprios e do Blender |
 | DDS DXT1/3/5 + 16/24/32 bits | leitura idêntica ao Pillow em 406 arquivos |
-| Escrita de DDS | **não implementada** (a textura volta como `.png`) |
+| Escrita de DDS | implementada, sem compressão (24/32 bits); é o padrão na volta |
+| Leitura de PNG | implementada; idêntica ao Pillow nas 406 texturas |
 | Skinning suave (multi-osso) | **não suportado**; fica o osso de maior peso |
 | CLI | `info`, `convert`, `batch`, nos dois sentidos |
 | GUI | tela única, tema escuro, direção automática, limpa a lista ao fim |
@@ -48,7 +49,8 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | Muitas animações num só GLB | suportado; testado com 68 |
 | Vários modelos num só GLB | suportado, com uma `skin` por esqueleto; `--merge` na CLI, padrão na GUI |
 | Textura por malha | suportado; um material por malha no GLB |
-| Testes | 168, só com a biblioteca padrão |
+| Detecção de textura | 127/127 modelos; 4 estratégias, com aviso quando é aproximação |
+| Testes | 194, só com a biblioteca padrão |
 | Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
 | Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
 | Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
@@ -247,6 +249,10 @@ errada e o personagem anima ao contrário. Há um teste específico
 | Agrupar por assinatura de esqueleto, não por contagem de ossos | há 18 esqueletos nos 127 modelos, 7 deles com 15 ossos; forçar um esqueleto só deformaria a malha |
 | Uma `skin` por esqueleto dentro do mesmo GLB | o glTF permite várias; é o único jeito correto de ter tudo num arquivo |
 | Animação vai para **um** grupo, não para todos os compatíveis | duplicar geraria várias actions de mesmo nome no Blender |
+| DDS sem compressão na volta | 281 das 406 texturas do jogo já são sem compressão; é aceito e sem perda. DXT seria com perda por ganho só de espaço |
+| `has_alpha` decidido pelos pixels, não pelo formato | nenhuma das 406 texturas do jogo tem transparência real; usar o formato faria toda textura opaca virar 32 bits |
+| Sem mipmaps no DDS escrito | 326 das 406 texturas originais também não têm |
+| Fallback de textura por prefixo, com aviso | os rostos têm uma textura por expressão e nem sempre a `_00`; pegar uma é melhor que nada, desde que avisado |
 
 ---
 
@@ -309,6 +315,18 @@ De ferramental:
 23. **`bpy.ops.import_scene.gltf` deixa os objetos importados selecionados.** Usar
     `bpy.context.selected_objects` é mais confiável que diferença de conjuntos: a
     cena inicial do Blender reaparece durante o import.
+24. **Todo PNG que este projeto escreve é RGBA.** Se `has_alpha` seguisse o tipo de
+    cor do PNG, toda textura opaca viraria DDS de 32 bits. Decida pelos pixels.
+25. **O DDS guarda os bytes em ordem BGR(A)**, consequência das máscaras
+    `R=0xFF0000 G=0xFF00 B=0xFF`. Trocar por RGB deixa o modelo azulado.
+26. **Não pegue `materials[0]` às cegas** ao extrair textura de um glTF: use o
+    material da primeira primitiva com geometria. Arquivos reais têm vários
+    materiais e o índice 0 pode não ser o da malha principal.
+27. **O numpy foi removido do sistema durante o desenvolvimento.** A validação
+    cruzada agora usa só Pillow, comparando bytes de uma vez (rápido) e só entrando
+    no caminho lento quando diferem.
+28. **No modo `batch` os avisos dos arquivos bem-sucedidos não apareciam.** Só as
+    falhas eram impressas; agora `-v` mostra todos.
 
 ---
 

@@ -17,7 +17,7 @@ botão para escolher: dado o que entrou, só existe um destino possível.
 | `.p3m` | Malha, esqueleto, skinning e UVs | v0.5 — **lê e escreve** |
 | `.frm` | Animação por keyframes (55 FPS) | v1.1 — **lê e escreve**; v1.0 lê |
 | `.glb` / `.gltf` | glTF 2.0 | **lê e escreve** |
-| `.dds` | Textura | DXT1, DXT3, DXT5 e 16/24/32 bits (leitura) |
+| `.dds` | Textura | **lê** DXT1/3/5 e 16/24/32 bits; **escreve** 24/32 bits sem compressão |
 
 ---
 
@@ -145,6 +145,7 @@ Opções que costumam ser úteis:
 | `--texture-dir PASTA` | procura texturas também nesta pasta |
 | `--texture ARQUIVO` | usa uma textura específica |
 | `--no-texture` | não embute nem extrai textura |
+| `--texture-format` | `dds` (padrão) ou `png` na volta para o jogo |
 | `--no-animations` | ao voltar para o jogo, não gera os `.frm` |
 | `--single-sided` | material de um lado só (padrão é dois lados) |
 | `-v` | mostra todos os avisos |
@@ -179,8 +180,15 @@ Ao converter um `.glb`, você recebe:
 ```
 personagem.p3m                 malha, esqueleto e skinning
 personagem_<animacao>.frm      uma por animação presente no glTF
-personagem.png                 a textura, se estava embutida
+personagem.dds                 a textura, no formato que o jogo lê
 ```
+
+A textura sai em **DDS sem compressão** (24 bits, ou 32 quando há
+transparência), com as mesmas máscaras de canal que o jogo usa nos seus próprios
+arquivos. Não é escolha arbitrária: das 406 texturas do jogo analisadas, **281 já
+são sem compressão**, então esse formato é comprovadamente aceito e a gravação é
+sem perda. O custo é tamanho em disco — uma textura de 128×128 sai com 49 KB em
+vez dos 8 KB de um DXT1. Use `--texture-format png` se preferir PNG.
 
 Três coisas que o formato do jogo impõe, e que o conversor avisa quando aplicam:
 
@@ -215,7 +223,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │       ├── glb.py         Escreve glTF 2.0 binário
 │       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
 ├── requirements-optional.txt  Dependências opcionais (drag and drop, build)
-├── tests/                 168 testes, só com a biblioteca padrão
+├── tests/                 194 testes, só com a biblioteca padrão
 ├── tools/
 │   ├── glb_inspect.py     Inspeciona, valida e compara GLB
 │   ├── validate_all.py    Validação em massa da direção direta
@@ -244,7 +252,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 python3 -m unittest discover -s tests -t .
 ```
 
-168 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
+194 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
 # direção direta: lê tudo e confere os GLB gerados

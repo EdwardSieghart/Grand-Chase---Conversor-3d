@@ -22,7 +22,14 @@ from .formats import gltf_in
 from .formats import p3m as p3m_format
 from .formats.glb import GlbOptions, export_glb
 from .scene import DEFAULT_FPS, Scene
-from .textures import DdsError, find_texture_file, load_texture_as_png
+from .textures import (
+    DdsError,
+    PngError,
+    find_texture_file,
+    image_to_dds,
+    load_texture_as_png,
+    resolve_texture,
+)
 
 __all__ = [
     "ConvertOptions",
@@ -86,8 +93,10 @@ class ConvertOptions:
     # ---- GLB -> P3M/FRM
     #: Grava tambem as animacoes do glTF como arquivos .frm.
     export_animations: bool = True
-    #: Extrai a textura embutida do glTF como .png ao lado do .p3m.
+    #: Extrai a textura embutida do glTF, ao lado do .p3m.
     extract_texture: bool = True
+    #: Formato da textura extraida: "dds" (o que o jogo le) ou "png".
+    texture_format: str = "dds"
     #: Prefixo dos arquivos .frm gerados.
     animation_prefix: str = ""
 
@@ -222,10 +231,24 @@ def _resolve_texture(
     path = options.texture_path
     if not path and model_path:
         declared = scene.meshes[0].texture_name if scene.meshes else ""
-        path = find_texture_file(model_path, declared, options.texture_dirs)
+        match = resolve_texture(model_path, declared, options.texture_dirs)
+        if match is None:
+            return None, None
+        path = match.path
+        if not match.exact:
+            extra = (
+                f" (ha {len(match.alternatives)} outra(s) com o mesmo prefixo)"
+                if match.alternatives
+                else ""
+            )
+            warn.append(
+                f"nao existe textura com o nome do modelo; usando "
+                f"{os.path.basename(path)} por semelhanca de nome{extra}. "
+                f"Se nao for a certa, indique com --texture."
+            )
+
     if not path:
         return None, None
-
     if not os.path.isfile(path):
         warn.append(f"textura nao encontrada: {path}")
         return None, None
@@ -534,11 +557,43 @@ def convert_to_gc(
         scene.to_left_handed()
 
         texture_name = ""
-        texture_png = None
+        texture_data: bytes | None = None
         if options.extract_texture:
-            texture_png = gltf_in.extract_base_color_png(document)
-            if texture_png:
+            embedded, mime, texture_warnings = gltf_in.extract_base_color_texture(
+                document
+            )
+            result.warnings.extend(texture_warnings)
+            if embedded is None:
+                pass
+            elif embedded[:8] != b"\x89PNG\r\n\x1a\n":
+                # Sem decodificador de JPEG aqui. Gravar o arquivo como esta e
+                # melhor que descartar: o usuario converte com qualquer visualizador.
+                extension = ".jpg" if "jpeg" in mime else ".bin"
+                texture_data = embedded
+                texture_name = stem + extension
+                result.warnings.append(
+                    f"a textura do glTF esta em {mime or 'formato desconhecido'}, "
+                    f"que este conversor nao decodifica; gravada como "
+                    f"{texture_name} sem conversao. Converta para DDS num editor "
+                    f"de imagem antes de usar no jogo."
+                )
+            elif options.texture_format == "png":
+                texture_data = embedded
                 texture_name = stem + ".png"
+            else:
+                # O jogo le DDS, e e nesse formato que as texturas dele estao.
+                # Gravamos sem compressao, que e o que a maioria das texturas
+                # originais usa e nao perde nada.
+                try:
+                    texture_data = image_to_dds(embedded)
+                    texture_name = stem + ".dds"
+                except (DdsError, PngError, ValueError) as error:
+                    result.warnings.append(
+                        f"nao foi possivel gravar a textura em DDS ({error}); "
+                        f"gravada como PNG"
+                    )
+                    texture_data = embedded
+                    texture_name = stem + ".png"
 
         p3m = p3m_format.scene_to_p3m(scene, texture_name)
         p3m_path = os.path.join(output_dir, stem + ".p3m")
@@ -546,11 +601,11 @@ def convert_to_gc(
         result.outputs.append(p3m_path)
         result.bytes_written += written
 
-        if texture_png:
+        if texture_data:
             texture_path = os.path.join(output_dir, texture_name)
-            _write_file(texture_path, texture_png)
+            _write_file(texture_path, texture_data)
             result.outputs.append(texture_path)
-            result.bytes_written += len(texture_png)
+            result.bytes_written += len(texture_data)
             result.texture_used = texture_path
 
         if options.export_animations:
