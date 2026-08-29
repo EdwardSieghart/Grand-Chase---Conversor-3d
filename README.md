@@ -70,7 +70,8 @@ carregados.
 
 Há também um `GrandChase3D-<versão>-exemplos.zip` na mesma página, com alguns
 modelos e uma animação do jogo, para o primeiro teste não depender de você já ter
-extraído arquivos.
+extraído arquivos. Os mesmos arquivos estão em
+[`samples/`](samples/) neste repositório.
 
 Se a sua distribuição não tiver mais a `libfuse2`, rode o AppImage com
 `--appimage-extract-and-run`.

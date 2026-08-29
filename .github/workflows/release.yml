@@ -323,16 +323,22 @@ jobs:
           print(f"::error title=Teste de fumaca do AppImage falhou::{escapado}")
           FIM
 
-      - name: Nomear o arquivo final
+      - name: Montar o zip de exemplos
+        run: python3 build/exemplos.py
+
+      - name: Nomear os arquivos finais
         run: |
           mkdir -p entrega
           cp "dist/GrandChase3D-${{ needs.versao.outputs.numero }}-x86_64.AppImage" entrega/
+          cp release/*-exemplos.zip entrega/
           ls -lh entrega
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: entrega/*.AppImage
+          path: |
+            entrega/*.AppImage
+            entrega/*.zip
           if-no-files-found: error
 
   # ----------------------------------------------------------------- publicar
@@ -374,6 +380,10 @@ jobs:
           que torna o programa portatil — leve os dois num pendrive e as suas
           configuracoes vao junto. Use `config` para ver onde estao.
 
+          O `GrandChase3D-VERSAO-exemplos.zip` traz alguns modelos, uma animacao e
+          as texturas, para o primeiro teste nao depender de voce ja ter extraido
+          arquivos do jogo. Ele NAO contem o programa.
+
           No Linux, marque como executavel antes do primeiro uso:
 
               chmod +x GrandChase3D-VERSAO-x86_64.AppImage
@@ -384,8 +394,14 @@ jobs:
           NOTAS
           sed -i "s/VERSAO/$VERSAO/g" notas.md
 
+          # O --clobber, e o create tolerando falha, deixam o passo idempotente:
+          # reexecutar o trabalho numa tag que ja tem Release passa a atualizar os
+          # arquivos em vez de abortar.
           gh release create "v$VERSAO" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Conversor $VERSAO" \
               --notes-file notas.md \
-              entrega/*
+              || echo "a Release ja existia; apenas atualizando os arquivos"
+
+          gh release upload "v$VERSAO" entrega/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
