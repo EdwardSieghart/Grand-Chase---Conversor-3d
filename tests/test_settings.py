@@ -128,6 +128,12 @@ class TestOndeFicaOArquivo(unittest.TestCase):
             raiz = executable_dir()
         self.assertTrue(os.path.isdir(os.path.join(raiz, "src", "gc3d")))
 
+    # Tornar uma pasta somente leitura com chmod e conceito POSIX. No Windows a
+    # permissao vem de ACL, os bits de modo do os.chmod nao impedem a escrita num
+    # diretorio, e os.geteuid() nem existe — chamá-lo ali levanta AttributeError.
+    # O comportamento em si (cair para a pasta de configuracao do sistema) esta
+    # coberto no Windows pelo test_pasta_de_reserva_por_sistema.
+    @unittest.skipIf(sys.platform == "win32", "pasta somente leitura via chmod e POSIX")
     def test_pasta_travada_cai_na_config_do_sistema(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root escreve em pasta somente leitura")
@@ -143,6 +149,7 @@ class TestOndeFicaOArquivo(unittest.TestCase):
             finally:
                 os.chmod(travada, stat.S_IRWXU)
 
+    @unittest.skipIf(sys.platform == "win32", "pasta somente leitura via chmod e POSIX")
     def test_ini_existente_ao_lado_ganha_mesmo_sem_escrita(self) -> None:
         """Programa levado num pendrive travado ainda respeita o INI que veio."""
         if os.geteuid() == 0:
@@ -163,9 +170,30 @@ class TestOndeFicaOArquivo(unittest.TestCase):
             finally:
                 os.chmod(pasta, stat.S_IRWXU)
 
+    def test_ini_existente_ao_lado_tem_prioridade(self) -> None:
+        """A mesma regra do teste acima, sem depender de permissao.
+
+        Vale nos dois sistemas: existindo um gc3d.ini ao lado do executavel, e ele
+        que manda, sem consultar a pasta de configuracao do sistema.
+        """
+        with tempfile.TemporaryDirectory() as pasta:
+            ini = os.path.join(pasta, CONFIG_NAME)
+            with open(ini, "w", encoding="utf-8") as handle:
+                handle.write("[gc3d]\npasta_saida = veio-do-lado\n")
+            with mock.patch.object(
+                settings_module, "executable_dir", return_value=pasta
+            ):
+                self.assertEqual(config_path(), ini)
+                self.assertEqual(Settings.load().pasta_saida, "veio-do-lado")
+
     def test_pasta_de_reserva_por_sistema(self) -> None:
-        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/cfg"}):
-            if sys.platform != "win32":
+        if sys.platform == "win32":
+            with mock.patch.dict(os.environ, {"APPDATA": r"C:\Users\eu\AppData\Roaming"}):
+                self.assertEqual(
+                    fallback_dir(), os.path.join(r"C:\Users\eu\AppData\Roaming", "gc3d")
+                )
+        else:
+            with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/cfg"}):
                 self.assertEqual(fallback_dir(), os.path.join("/tmp/cfg", "gc3d"))
 
 
@@ -177,12 +205,17 @@ class TestGravacaoNaInterface(unittest.TestCase):
     processo, ou o proprio `xdotool windowclose`, que foi como o defeito
     apareceu. Aqui a janela e destruida DE PROPOSITO pelo caminho ruim.
 
-    Precisa de tela: sem DISPLAY o teste e pulado, como o resto da suite faz.
+    Precisa de tela. No Linux isso quer dizer DISPLAY ou WAYLAND_DISPLAY; no
+    Windows a sessao grafica sempre existe, e checar DISPLAY ali faria o teste ser
+    pulado justamente onde ele tambem interessa.
     """
 
     @classmethod
     def setUpClass(cls) -> None:
-        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        sem_tela = not (
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        )
+        if sys.platform != "win32" and sem_tela:
             raise unittest.SkipTest("sem tela disponivel")
         try:
             import tkinter
