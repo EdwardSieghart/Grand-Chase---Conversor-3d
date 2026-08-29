@@ -148,10 +148,15 @@ jobs:
               }
 
               # Conversao de ida e volta, com um modelo de verdade do repositorio.
-              $modelo = (Get-ChildItem -Recurse samples -Filter *.p3m | Select-Object -First 1).FullName
+              # O --texture-dir e necessario: no repositorio os modelos estao em
+              # samples\p3m e as texturas em samples\dds, e o conversor procura a
+              # textura na pasta do modelo. Sem apontar a pasta, o .glb sairia sem
+              # textura e a volta nao teria .dds para gravar -- o que torna o
+              # proprio caminho da textura parte do que este teste verifica.
+              $modelo = (Get-ChildItem -Recurse samples\p3m -Filter *.p3m | Select-Object -First 1).FullName
               Write-Host "modelo de teste: $modelo"
 
-              $codigo = Rodar @('convert', $modelo, '-o', 'ida') 'ida.txt'
+              $codigo = Rodar @('convert', $modelo, '--texture-dir', 'samples\dds', '-o', 'ida') 'ida.txt'
               Get-Content 'ida.txt'
               if ($codigo -ne 0) { throw "a ida saiu com $codigo" }
               $glb = Get-ChildItem 'ida' -Filter *.glb
@@ -254,9 +259,14 @@ jobs:
           rodar --version
           rodar config
 
-          modelo=$(find samples -name '*.p3m' | head -1)
+          # O --texture-dir e necessario: no repositorio os modelos estao em
+          # samples/p3m e as texturas em samples/dds, e o conversor procura a
+          # textura na pasta do modelo. Sem apontar a pasta, o .glb sairia sem
+          # textura e a volta nao teria .dds para gravar -- o que torna o proprio
+          # caminho da textura parte do que este teste verifica.
+          modelo=$(find samples/p3m -name '*.p3m' | sort | head -1)
           echo "modelo de teste: $modelo"
-          rodar convert "$modelo" -o ida
+          rodar convert "$modelo" --texture-dir samples/dds -o ida
           test -n "$(find ida -name '*.glb')"
           rodar convert "$(find ida -name '*.glb' | head -1)" -o volta
           test -n "$(find volta -name '*.p3m')"
@@ -272,11 +282,32 @@ jobs:
           # sem querer, o AppImage para de abrir nas maquinas mais antigas e
           # ninguem percebe — por isso o numero aparece no log.
           "./$arquivo" --appimage-extract >/dev/null
-          maior=$(for f in squashfs-root/usr/bin/gc3d; do objdump -T "$f"; done 2>/dev/null \
+          maior=$(objdump -T squashfs-root/usr/bin/gc3d 2>/dev/null \
               | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
           echo "glibc exigida pelo carregador: $maior"
 
           echo "teste de fumaca completo"
+
+      # Mesma razao do lado Windows: sem isto, uma falha aqui exigiria o log, que
+      # a API do GitHub so entrega autenticado.
+      - name: Publicar a falha como anotacao
+        if: failure()
+        run: |
+          python3 - <<'FIM'
+          import pathlib
+
+          partes = []
+          for nome in ("ida", "volta"):
+              pasta = pathlib.Path(nome)
+              if pasta.is_dir():
+                  achados = sorted(p.name for p in pasta.iterdir())
+                  partes.append(f"{nome}/: {achados}")
+              else:
+                  partes.append(f"{nome}/: nao existe")
+          texto = "\n".join(partes) or "sem detalhes"
+          escapado = texto.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error title=Teste de fumaca do AppImage falhou::{escapado}")
+          FIM
 
       - name: Nomear o arquivo final
         run: |
