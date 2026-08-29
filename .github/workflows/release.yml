@@ -244,10 +244,17 @@ jobs:
       - name: Montar o AppImage
         run: ./build/linux/appimage_interno.sh
 
+      # O script vai para um arquivo e roda sob 'bash -x' para que o rastreamento
+      # fique gravado: o log do Actions so e acessivel autenticado, e sem o
+      # rastreamento uma falha aqui informa apenas o codigo de saida.
       - name: Teste de fumaca
+        shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
+          cat > /tmp/fumaca.sh <<'SCRIPT'
+          set -euxo pipefail
           arquivo="dist/GrandChase3D-${{ needs.versao.outputs.numero }}-x86_64.AppImage"
+          ls -l dist/
           test -x "$arquivo"
 
           # Container nao tem FUSE, e montar um AppImage depende dela. Com esta
@@ -267,26 +274,28 @@ jobs:
           modelo=$(find samples/p3m -name '*.p3m' | sort | head -1)
           echo "modelo de teste: $modelo"
           rodar convert "$modelo" --texture-dir samples/dds -o ida
+          ls -l ida/
           test -n "$(find ida -name '*.glb')"
           rodar convert "$(find ida -name '*.glb' | head -1)" -o volta
+          ls -l volta/
           test -n "$(find volta -name '*.p3m')"
           test -n "$(find volta -name '*.dds')"
 
           if rodar info nao-existe.p3m; then
-              echo "::error::arquivo inexistente devia dar codigo diferente de zero"
+              echo "arquivo inexistente devia dar codigo diferente de zero"
               exit 1
           fi
 
           # A promessa de portabilidade e verificavel: conferimos a maior versao
-          # de glibc exigida pelas bibliotecas embutidas. Se algum dia isso subir
-          # sem querer, o AppImage para de abrir nas maquinas mais antigas e
-          # ninguem percebe — por isso o numero aparece no log.
+          # de glibc exigida. Se algum dia isso subir sem querer, o AppImage para
+          # de abrir nas maquinas mais antigas e ninguem percebe.
           "./$arquivo" --appimage-extract >/dev/null
-          maior=$(objdump -T squashfs-root/usr/bin/gc3d 2>/dev/null \
-              | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
-          echo "glibc exigida pelo carregador: $maior"
+          objdump -T squashfs-root/usr/bin/gc3d \
+              | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1
 
           echo "teste de fumaca completo"
+          SCRIPT
+          bash /tmp/fumaca.sh 2>&1 | tee fumaca.txt
 
       # Mesma razao do lado Windows: sem isto, uma falha aqui exigiria o log, que
       # a API do GitHub so entrega autenticado.
@@ -296,15 +305,13 @@ jobs:
           python3 - <<'FIM'
           import pathlib
 
-          partes = []
-          for nome in ("ida", "volta"):
-              pasta = pathlib.Path(nome)
-              if pasta.is_dir():
-                  achados = sorted(p.name for p in pasta.iterdir())
-                  partes.append(f"{nome}/: {achados}")
-              else:
-                  partes.append(f"{nome}/: nao existe")
-          texto = "\n".join(partes) or "sem detalhes"
+          arquivo = pathlib.Path("fumaca.txt")
+          if arquivo.is_file():
+              linhas = [l for l in arquivo.read_text(
+                  encoding="utf-8", errors="replace").splitlines() if l.strip()]
+              texto = "\n".join(linhas[-45:])
+          else:
+              texto = "o rastreamento nao foi gravado"
           escapado = texto.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
           print(f"::error title=Teste de fumaca do AppImage falhou::{escapado}")
           FIM
