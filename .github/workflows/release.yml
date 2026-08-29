@@ -18,9 +18,16 @@ name: release
 #
 # Rodar com workflow_dispatch compila e testa tudo, mas NAO publica nada. Serve
 # para conferir o build antes de criar a tag.
+#
+# O mesmo vale para push em main: os dois executaveis sao compilados e submetidos
+# ao teste de fumaca, sem publicar. Isso existe porque o .exe e a unica peca que
+# nao da para testar numa maquina Linux — o PyInstaller nao faz compilacao cruzada
+# —, e descobrir que ele quebrou na hora de lancar seria tarde. Publicar continua
+# preso a tag.
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -71,7 +78,25 @@ jobs:
         run: python -m pip install --quiet "pyinstaller>=6.0" "tkinterdnd2==0.6.2" pytest
 
       - name: Rodar a suite
-        run: python -m pytest tests -q
+        shell: bash
+        run: python -m pytest tests -q -rf 2>&1 | tee pytest.txt
+
+      - name: Publicar a falha da suite como anotacao
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'FIM'
+          import pathlib
+          arquivo = pathlib.Path("pytest.txt")
+          if not arquivo.is_file():
+              print("::error title=Suite falhou::sem saida do pytest")
+              raise SystemExit
+          linhas = [l for l in arquivo.read_text(
+              encoding="utf-8", errors="replace").splitlines() if l.strip()]
+          escapado = ("\n".join(linhas[-45:])).replace("%", "%25").replace(
+              "\r", "").replace("\n", "%0A")
+          print(f"::error title=Suite falhou no Windows::{escapado}")
+          FIM
 
       - name: Compilar o .exe
         run: build\windows\build.bat
@@ -80,6 +105,10 @@ jobs:
       # registrada: o .exe e do subsistema grafico, entao quem o chama NAO espera
       # ele terminar. Chamado direto, o passo seguiria antes de o programa
       # escrever qualquer coisa, e o teste passaria sem testar nada.
+      #
+      # O try/catch no fim existe para o motivo da falha virar uma anotacao no
+      # commit: a API do GitHub so entrega o log autenticado, e este e o unico
+      # teste do projeto que nao pode ser reproduzido numa maquina Linux.
       - name: Teste de fumaca no Windows de verdade
         shell: pwsh
         run: |
@@ -92,52 +121,70 @@ jobs:
               return $processo.ExitCode
           }
 
-          # --version. Redirecionar para arquivo exercita justamente o caminho
-          # dos identificadores herdados em gc3d_app.attach_console(), que e o
-          # que faz a saida cair no arquivo em vez de no console.
-          $codigo = Rodar @('--version') 'versao.txt'
-          $texto = (Get-Content 'versao.txt' -Raw).Trim()
-          Write-Host "--version devolveu $codigo e escreveu: '$texto'"
-          if ($codigo -ne 0) { throw "--version saiu com $codigo" }
-          if ($texto.Length -eq 0) {
-              throw "o redirecionamento nao funcionou: arquivo vazio"
+          try {
+              # --version. Redirecionar para arquivo exercita justamente o caminho
+              # dos identificadores herdados em gc3d_app.attach_console(), que e o
+              # que faz a saida cair no arquivo em vez de no console.
+              $codigo = Rodar @('--version') 'versao.txt'
+              $texto = (Get-Content 'versao.txt' -Raw).Trim()
+              Write-Host "--version devolveu $codigo e escreveu: '$texto'"
+              if ($codigo -ne 0) { throw "--version saiu com $codigo" }
+              if ($texto.Length -eq 0) {
+                  throw "o redirecionamento nao funcionou: arquivo vazio"
+              }
+              $numero = [regex]::Escape('${{ needs.versao.outputs.numero }}')
+              if ($texto -notmatch $numero) {
+                  throw "esperava a versao ${{ needs.versao.outputs.numero }}, veio '$texto'"
+              }
+
+              # O .exe acha a propria pasta? E o caso que muda entre codigo-fonte e
+              # empacotado, e onde o gc3d.ini vai morar.
+              $codigo = Rodar @('config') 'config.txt'
+              Get-Content 'config.txt'
+              if ($codigo -ne 0) { throw "config saiu com $codigo" }
+              $esperado = (Resolve-Path 'dist\windows').Path
+              if ((Get-Content 'config.txt' -Raw) -notmatch [regex]::Escape($esperado)) {
+                  throw "o exe nao reconheceu a propria pasta ($esperado)"
+              }
+
+              # Conversao de ida e volta, com um modelo de verdade do repositorio.
+              $modelo = (Get-ChildItem -Recurse samples -Filter *.p3m | Select-Object -First 1).FullName
+              Write-Host "modelo de teste: $modelo"
+
+              $codigo = Rodar @('convert', $modelo, '-o', 'ida') 'ida.txt'
+              Get-Content 'ida.txt'
+              if ($codigo -ne 0) { throw "a ida saiu com $codigo" }
+              $glb = Get-ChildItem 'ida' -Filter *.glb
+              if (-not $glb) { throw "nenhum .glb foi gerado" }
+
+              $codigo = Rodar @('convert', $glb[0].FullName, '-o', 'volta') 'volta.txt'
+              Get-Content 'volta.txt'
+              if ($codigo -ne 0) { throw "a volta saiu com $codigo" }
+              if (-not (Get-ChildItem 'volta' -Filter *.p3m)) { throw "nenhum .p3m na volta" }
+              if (-not (Get-ChildItem 'volta' -Filter *.dds)) { throw "nenhuma textura .dds na volta" }
+
+              # Codigo de erro em arquivo que nao existe: scripts dependem disso.
+              $codigo = Rodar @('info', 'nao-existe.p3m') 'erro.txt'
+              if ($codigo -eq 0) { throw "arquivo inexistente devia dar codigo diferente de zero" }
+
+              Write-Host "teste de fumaca completo"
           }
-          $numero = [regex]::Escape('${{ needs.versao.outputs.numero }}')
-          if ($texto -notmatch $numero) {
-              throw "esperava a versao ${{ needs.versao.outputs.numero }}, veio '$texto'"
+          catch {
+              $detalhe = $_.Exception.Message
+              foreach ($nome in @('versao.txt', 'config.txt', 'ida.txt', 'volta.txt', 'erro.txt')) {
+                  if (Test-Path $nome) {
+                      $conteudo = (Get-Content $nome -Raw)
+                      if ($conteudo) { $detalhe += "`n--- $nome ---`n$conteudo" }
+                      $erro = "$nome.err"
+                      if ((Test-Path $erro) -and (Get-Content $erro -Raw)) {
+                          $detalhe += "`n--- $erro ---`n" + (Get-Content $erro -Raw)
+                      }
+                  }
+              }
+              $escapado = $detalhe.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+              Write-Host "::error title=Teste de fumaca do .exe falhou::$escapado"
+              exit 1
           }
-
-          # O .exe acha a propria pasta? E o caso que muda entre codigo-fonte e
-          # empacotado, e onde o gc3d.ini vai morar.
-          $codigo = Rodar @('config') 'config.txt'
-          Get-Content 'config.txt'
-          if ($codigo -ne 0) { throw "config saiu com $codigo" }
-          $esperado = (Resolve-Path 'dist\windows').Path
-          if ((Get-Content 'config.txt' -Raw) -notmatch [regex]::Escape($esperado)) {
-              throw "o exe nao reconheceu a propria pasta ($esperado)"
-          }
-
-          # Conversao de ida e volta, com um modelo de verdade do repositorio.
-          $modelo = (Get-ChildItem -Recurse samples -Filter *.p3m | Select-Object -First 1).FullName
-          Write-Host "modelo de teste: $modelo"
-
-          $codigo = Rodar @('convert', $modelo, '-o', 'ida') 'ida.txt'
-          Get-Content 'ida.txt'
-          if ($codigo -ne 0) { throw "a ida saiu com $codigo" }
-          $glb = Get-ChildItem 'ida' -Filter *.glb
-          if (-not $glb) { throw "nenhum .glb foi gerado" }
-
-          $codigo = Rodar @('convert', $glb[0].FullName, '-o', 'volta') 'volta.txt'
-          Get-Content 'volta.txt'
-          if ($codigo -ne 0) { throw "a volta saiu com $codigo" }
-          if (-not (Get-ChildItem 'volta' -Filter *.p3m)) { throw "nenhum .p3m na volta" }
-          if (-not (Get-ChildItem 'volta' -Filter *.dds)) { throw "nenhuma textura .dds na volta" }
-
-          # Codigo de erro em arquivo que nao existe: scripts dependem disso.
-          $codigo = Rodar @('info', 'nao-existe.p3m') 'erro.txt'
-          if ($codigo -eq 0) { throw "arquivo inexistente devia dar codigo diferente de zero" }
-
-          Write-Host "teste de fumaca completo"
 
       - name: Nomear o arquivo final
         shell: pwsh
