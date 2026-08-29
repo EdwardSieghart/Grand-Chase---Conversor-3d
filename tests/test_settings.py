@@ -205,9 +205,11 @@ class TestGravacaoNaInterface(unittest.TestCase):
     processo, ou o proprio `xdotool windowclose`, que foi como o defeito
     apareceu. Aqui a janela e destruida DE PROPOSITO pelo caminho ruim.
 
-    Precisa de tela. No Linux isso quer dizer DISPLAY ou WAYLAND_DISPLAY; no
-    Windows a sessao grafica sempre existe, e checar DISPLAY ali faria o teste ser
-    pulado justamente onde ele tambem interessa.
+    Precisa de tela, e de um Tk que inicialize. Quando nao da, o teste e pulado
+    com o motivo dito em voz alta, em vez de falhar por defeito de ambiente: no
+    runner Windows do GitHub, o Tcl que acompanha o `actions/setup-python` nao
+    consegue carregar o proprio `init.tcl`. O comportamento continua coberto pelo
+    trabalho do Linux, que roda sob xvfb.
     """
 
     @classmethod
@@ -217,16 +219,13 @@ class TestGravacaoNaInterface(unittest.TestCase):
         )
         if sys.platform != "win32" and sem_tela:
             raise unittest.SkipTest("sem tela disponivel")
-        try:
-            import tkinter
-        except ImportError as error:  # pragma: no cover
-            raise unittest.SkipTest(f"tkinter ausente: {error}")
-        try:
-            raiz = tkinter.Tk()
-        except Exception as error:  # noqa: BLE001
-            raise unittest.SkipTest(f"nao foi possivel abrir janela: {error}")
-        raiz.destroy()
 
+        # Aqui NAO se cria um Tk de sondagem. Fazer isso e destrui-lo em seguida
+        # deixava o Tk do teste ser o SEGUNDO interpretador do processo, e foi
+        # exatamente onde o runner Windows quebrou: a sondagem passou — a classe
+        # nao foi pulada — e a criacao seguinte morreu sem achar o init.tcl. Um
+        # ciclo de vida de Tk por teste, e o proprio teste decide se da para
+        # seguir.
         import importlib.util
 
         raiz_projeto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -241,13 +240,20 @@ class TestGravacaoNaInterface(unittest.TestCase):
             raise unittest.SkipTest(f"nao foi possivel carregar a GUI: {error}")
         cls.gui = modulo
 
-    def test_mudanca_chega_ao_disco_sem_fechar_a_janela(self) -> None:
+    def _abrir_raiz(self):
+        """Cria a janela raiz, ou pula o teste dizendo por que nao deu."""
         import tkinter
 
+        try:
+            return tkinter.Tk()
+        except Exception as error:  # noqa: BLE001
+            self.skipTest(f"o Tk nao inicializa neste ambiente: {error}")
+
+    def test_mudanca_chega_ao_disco_sem_fechar_a_janela(self) -> None:
         pasta = tempfile.mkdtemp(prefix="gc3d-prefs-gui-")
         ini = os.path.join(pasta, CONFIG_NAME)
 
-        raiz = tkinter.Tk()
+        raiz = self._abrir_raiz()
         raiz.withdraw()
         try:
             app = self.gui.ConverterApp(raiz, settings=Settings(path=ini))
