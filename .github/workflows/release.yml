@@ -271,12 +271,19 @@ jobs:
           # textura na pasta do modelo. Sem apontar a pasta, o .glb sairia sem
           # textura e a volta nao teria .dds para gravar -- o que torna o proprio
           # caminho da textura parte do que este teste verifica.
-          modelo=$(find samples/p3m -name '*.p3m' | sort | head -1)
+          # Nao use 'find | sort | head -1' aqui: sob pipefail, o head fecha o cano
+          # e o sort pode morrer com SIGPIPE, fazendo a linha "falhar" mesmo tendo
+          # dado certo. E corrida, entao falha as vezes -- e um teste de release
+          # que falha as vezes e pior que um que falha sempre. O mapfile le tudo,
+          # sem processo a jusante para interromper ninguem.
+          mapfile -t modelos < <(find samples/p3m -name '*.p3m' | sort)
+          modelo="${modelos[0]}"
           echo "modelo de teste: $modelo"
           rodar convert "$modelo" --texture-dir samples/dds -o ida
           ls -l ida/
           test -n "$(find ida -name '*.glb')"
-          rodar convert "$(find ida -name '*.glb' | head -1)" -o volta
+          mapfile -t glbs < <(find ida -name '*.glb' | sort)
+          rodar convert "${glbs[0]}" -o volta
           ls -l volta/
           test -n "$(find volta -name '*.p3m')"
           test -n "$(find volta -name '*.dds')"
