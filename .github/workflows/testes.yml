@@ -46,7 +46,38 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends xvfb python3-tk
 
       - name: Rodar a suite
-        run: ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}python -m pytest tests -q
+        shell: bash
+        run: |
+          ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}python -m pytest tests -q -rf 2>&1 | tee pytest.txt
+
+      # Sem isto, saber POR QUE a suite falhou exige baixar o log, que a API do
+      # GitHub só entrega autenticado. Uma anotação aparece no próprio commit e é
+      # legível por qualquer um, o que torna a falha diagnosticável de fora.
+      - name: Publicar a falha como anotacao
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'FIM'
+          import pathlib
+
+          arquivo = pathlib.Path("pytest.txt")
+          if not arquivo.is_file():
+              print("::error title=Suite falhou::a saida do pytest nao foi gravada")
+              raise SystemExit
+
+          linhas = [l for l in arquivo.read_text(
+              encoding="utf-8", errors="replace").splitlines() if l.strip()]
+          trecho = "\n".join(linhas[-45:])
+
+          # Anotação é uma linha só: o '%' vem primeiro para não escapar duas
+          # vezes, e a quebra de linha vira %0A.
+          escapado = (
+              trecho.replace("%", "%25")
+              .replace("\r", "")
+              .replace("\n", "%0A")
+          )
+          print(f"::error title=Suite falhou::{escapado}")
+          FIM
 
       # Confere o programa pelo codigo-fonte, antes de qualquer empacotamento: se
       # falhar aqui, o problema e do codigo, nao do PyInstaller.
