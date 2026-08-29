@@ -50,35 +50,37 @@ aviso *"GLTF importing does not work properly yet"* no próprio código.
 | Vários modelos num só GLB | suportado, com uma `skin` por esqueleto; `--merge` na CLI, padrão na GUI |
 | Textura por malha | suportado; um material por malha no GLB |
 | Detecção de textura | 127/127 modelos; 4 estratégias, com aviso quando é aproximação |
-| Testes | 205, só com a biblioteca padrão |
-| Pacotes por sistema | `build/empacotar.py` monta `release/GrandChase3D-{Linux,Windows}` |
-| Publicação | `tools/publicar_github.sh`, com `--release` para anexar os .zip |
-| Build Linux | `build/linux/build.sh` → `dist/linux/` — **funciona** |
-| Build Windows nativo | `build/windows/build.bat` — **não testado** (sem máquina Windows) |
-| Build Windows via Wine | `build/windows/build_wine.sh` — **incompleto**, ver pendências |
+| Testes | 239, só com a biblioteca padrão; rodam no CI em Linux e Windows |
+| Preferências | `gc3d.ini` na pasta do executável, com reserva na config do sistema |
+| Distribuição | um arquivo por sistema: `.exe` e `.AppImage`, gerados pelo CI na tag |
+| Zip de exemplos | `build/exemplos.py` → `release/GrandChase3D-<versão>-exemplos.zip` |
+| Build Linux | `build/linux/build.sh` → `dist/linux/gc3d` — **funciona** (para testar) |
+| AppImage | `build/linux/appimage.sh`, em container Ubuntu 22.04 — **funciona** |
+| Build Windows nativo | `build/windows/build.bat` — roda no CI a cada tag |
+| Publicação | `.github/workflows/release.yml`, automática na tag `v*` |
 | Publicação no GitHub | **feita**: github.com/EdwardSieghart/Grand-Chase---Conversor-3d |
 
 ---
 
 ## Pendências conhecidas
 
-1. **`.exe` do Windows não foi gerado.** O `build_wine.sh` está escrito e o Python
-   3.12.8 para Windows já foi baixado e instalado em `~/.gc3d-wine`
-   (`drive_c/python/python.exe` funciona). Faltou instalar pip e PyInstaller dentro
-   do Wine e rodar o empacotamento. O script faz tudo isso sozinho ao ser
-   executado de novo; leva alguns minutos.
-   - Risco conhecido: a distribuição *embutida* do Python não inclui tkinter. O
-     script tenta buscar `_tkinter.pyd` e as bibliotecas Tcl/Tk do pacote NuGet do
-     Python. Se não conseguir, o `gc3d.exe` (linha de comando) sai bom e o
-     `gc3d-gui.exe` pode falhar ao abrir. A alternativa garantida é rodar
-     `build\windows\build.bat` numa máquina Windows real.
-2. **Pacotes prontos ainda não anexados como Release.** O código está publicado,
-   mas os `.zip` de `release/` não. Isso exige um **token** (a API do GitHub não
-   aceita SSH):
-
-       python3 build/empacotar.py --zip
-       ./tools/publicar_github.sh EdwardSieghart Grand-Chase---Conversor-3d --release
-3. **Nada foi testado dentro do jogo.** A evidência é de consistência de formato e
+1. **O `.exe` nunca foi executado por um humano.** Ele é compilado e submetido a um
+   teste de fumaça pelo CI num Windows de verdade — versão, `config`, conversão de
+   ida e volta, redirecionamento de saída e código de erro —, mas ninguém abriu a
+   interface e clicou nos botões. O ponto de maior risco é o
+   `gc3d_app.attach_console()`, que só existe por causa do Windows e é o único
+   trecho sem cobertura em máquina Linux.
+   - A tentativa anterior de gerar o `.exe` por Wine foi **aposentada**. Ela
+     produzia o executável de linha de comando, mas nunca a interface: a
+     `tcl86t.dll` não carrega no Wine.
+2. **O AppImage cobre glibc 2.35 ou mais nova.** Medido com `objdump`, vindo de
+   `libpython3.10.so`, `libtcl8.6`, `libtk8.6` e `libBLT`. Cobre Ubuntu 22.04+,
+   Debian 12+, Fedora 36+ e RHEL 9+. Sistemas mais antigos precisam rodar pelo
+   código-fonte. Para descer esse número, seria preciso construir numa base mais
+   antiga ainda, como `manylinux`.
+3. **Só x86-64.** O `appimage_interno.sh` já usa `uname -m` e funcionaria em
+   `aarch64`, mas nenhum build ARM foi feito nem o CI tem um job para isso.
+4. **Nada foi testado dentro do jogo.** A evidência é de consistência de formato e
    de ida e volta, não de execução no Grand Chase.
 
 ---
@@ -255,9 +257,10 @@ errada e o personagem anima ao contrário. Há um teste específico
 | `has_alpha` decidido pelos pixels, não pelo formato | nenhuma das 406 texturas do jogo tem transparência real; usar o formato faria toda textura opaca virar 32 bits |
 | Sem mipmaps no DDS escrito | 326 das 406 texturas originais também não têm |
 | Fallback de textura por prefixo, com aviso | os rostos têm uma textura por expressão e nem sempre a `_00`; pegar uma é melhor que nada, desde que avisado |
-| Lançadores funcionam com ou sem binário | a mesma pasta serve para quem baixou o pacote e para quem só tem o código |
-| `release/` fora do git, pacotes via GitHub Release | binário commitado fica no histórico para sempre; cada rebuild somaria outros 26 MB |
-| Detecção de Python em camadas no `.bat` | `where` não existe em todo ambiente (o cmd do Wine não tem); há plano B chamando o interpretador direto |
+| Um executável por sistema, sem pasta em volta | com um ponto de entrada só, os lançadores e a cópia do código em `app/` eram embalagem em torno de um arquivo que já se basta |
+| `dist/` e `release/` fora do git, binários via GitHub Release | binário commitado fica no histórico para sempre; cada rebuild somaria outros megabytes ao clone |
+| Preferências ao lado do executável, não na pasta do sistema | deixa o programa portátil; a pasta do sistema é só reserva para quando não há permissão de escrita |
+| `.exe` no subsistema gráfico, com o console recuperado à mão | o clique duplo é o uso normal, e uma janela preta atrás da interface a cada abertura é pior que a limitação do prompt não esperar |
 
 ---
 
@@ -332,11 +335,28 @@ De ferramental:
     no caminho lento quando diferem.
 28. **No modo `batch` os avisos dos arquivos bem-sucedidos não apareciam.** Só as
     falhas eram impressas; agora `-v` mostra todos.
-29. **`where` não existe no cmd do Wine** (errorlevel 9009). O lançador `.bat`
-    precisou de detecção em camadas: `where` primeiro, chamada direta como reserva.
+29. **`AttachConsole` pode substituir os identificadores padrão do processo.** Num
+    `.exe` do subsistema gráfico, ler os identificadores herdados **depois** dele
+    fazia `gc3d.exe info a.p3m > lista.txt` escrever na tela em vez do arquivo. A
+    leitura tem de vir antes. E `GetStdHandle` precisa de `restype = c_void_p`,
+    senão o `ctypes` assume `c_int` e trunca o `HANDLE` em 64 bits.
 30. **`pkill -f <padrão>` mata o próprio shell** quando o padrão aparece na linha
-    de comando em execução. Para testar GUI, use `timeout` ou `pgrep -x`.
-31. **O disco pode ser remontado em outro caminho.** Era
+    de comando em execução. Use o truque do colchete: `pkill -f "[G]randChase"`.
+31. **Ao salvar `.ico`, o Pillow não amplia.** Um tamanho pedido sem imagem
+    correspondente em `append_images` é gerado a partir da **última** da lista, via
+    `thumbnail()`, que só reduz. Fornecendo apenas as versões pequenas, o 48, o 64
+    e o 128 nasciam do 32 e continuavam com 32 pixels. Entregue todos os tamanhos
+    prontos, e confira o resultado.
+32. **`ldd --version | head -1` sob `pipefail` "falha".** O `head` fecha o cano, o
+    `ldd` morre com SIGPIPE e um `|| echo` no fim dispara mesmo tendo dado certo.
+    Use `sed -n '1{s/.*[[:space:]]//;p}'`.
+33. **`--userns=keep-id` do podman impede o `apt` no container** (`Permission
+    denied` em `/var/lib/apt/lists`). Sem ela, o rootless já mapeia o root do
+    container para o seu usuário, e os arquivos gerados saem com o dono certo.
+34. **Gravar preferências só ao fechar perde tudo** quando a janela é destruída sem
+    `WM_DELETE_WINDOW` — sessão encerrada, gerenciador de janelas matando o
+    processo. Grave a cada mudança, com adiamento para juntar rajadas.
+35. **O disco pode ser remontado em outro caminho.** Era
     `/run/media/eduardo/Arquivos`, virou `/mnt/Arquivos`. As ferramentas recebem
     caminhos por argumento, então nada no código quebrou.
 
@@ -346,33 +366,37 @@ De ferramental:
 
 - Fedora Linux, Python 3.14.7, tkinter presente, git presente.
 - **Sem** `cargo` (o conversor antigo não pôde ser compilado para comparar).
-- Chave SSH em `~/.ssh/id_ed25519`, registrada na conta do GitHub. **Sem** `gh`
-  CLI e sem token (o token só é necessário para anexar Releases pela API).
 - **Sem** node/npm (o `gltf-validator` oficial não pôde ser usado; daí o
   `tools/glb_inspect.py` escrito à mão a partir da especificação).
-- Pillow 12.3 e numpy 2.4 disponíveis — usados **só** para validação cruzada.
+- Pillow e numpy disponíveis — usados **só** para validação cruzada, e o Pillow
+  também para gerar o ícone em `build/icone/`.
 - Blender 5.2 via Flatpak (`flatpak run org.blender.Blender`).
-- PyInstaller 6.22.2 instalado com `pip install --user`.
-- Wine em `/usr/bin/wine`; prefixo do projeto em `~/.gc3d-wine`.
+- PyInstaller 6.x e `tkinterdnd2`, num ambiente virtual do projeto.
+- `podman`, necessário para montar o AppImage no container Ubuntu 22.04.
+- Nada disso é exigido para **usar** o programa, e nem para compilá-lo: os dois
+  executáveis saem do GitHub Actions.
 
 ---
 
 ## Próximos passos sugeridos, em ordem de valor
 
-1. **Terminar o `.exe` do Windows.** Rodar `./build/windows/build_wine.sh` de novo
-   (reaproveita o download já feito), ou `build\windows\build.bat` numa máquina
-   Windows, que é o caminho garantido para a interface gráfica.
-2. **Anexar os pacotes como Release.** Precisa de token; ver as pendências acima.
-3. **Testar no jogo.** É a única camada de validação que falta.
-4. **P3M v0.6 e v1.0.** Layout documentado. A v1.0 tem multi-bone skinning, que
+1. **Abrir o `.exe` num Windows de verdade.** Ele é compilado e passa pelo teste de
+   fumaça do CI, mas ninguém clicou nos botões da interface. Vale conferir o
+   arrastar e soltar, o `gc3d.ini` nascendo ao lado do `.exe`, e o comportamento
+   do console descrito em `gc3d_app.attach_console()`.
+2. **Testar no jogo.** É a única camada de validação que falta.
+3. **P3M v0.6 e v1.0.** Layout documentado. A v1.0 tem multi-bone skinning, que
    exige `Vertex` virar lista de `(joint, weight)`; o exportador GLB já escreve
    `VEC4`, então cabem 4 influências sem mudar o formato de saída.
-5. **P3M v0.7 e v0.8.** Mais trabalhosas: exigem o algoritmo de face permutation
+4. **P3M v0.7 e v0.8.** Mais trabalhosas: exigem o algoritmo de face permutation
    (120 combinações) e autodetecção de layout de vértice. Ambos documentados.
-6. **FRM v1.2.** Duas listas de matrizes (`Bones` = rotação, `Bones2` = translação)
+5. **FRM v1.2.** Duas listas de matrizes (`Bones` = rotação, `Bones2` = translação)
    e bones degenerados em cerca de 37% dos arquivos.
-7. **Escrita de DDS** (A8R8G8B8 sem compressão, ~40 linhas), para a textura voltar
-   no formato que o jogo lê.
+6. **Compressão DXT na escrita de DDS.** A escrita sem compressão já funciona e é
+   o padrão, mas gera arquivos grandes: uma textura 128×128 sai com 49 KB em vez
+   dos 8 KB de um DXT1. Comprimir reduziria o tamanho no disco do jogo.
+7. **AppImage para `aarch64`.** O `appimage_interno.sh` já usa `uname -m` e
+   funcionaria; falta um job no CI e uma máquina para testar.
 8. **Conversão paralela no lote.** `convert_batch` é sequencial; com
    `concurrent.futures.ProcessPoolExecutor` o ganho é linear no número de núcleos,
    já que cada arquivo é independente.

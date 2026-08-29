@@ -49,6 +49,7 @@ from gc3d import (  # noqa: E402
     convert_model,
     convert_to_gc,
 )
+from gc3d.settings import CONFIG_NAME, Settings, executable_dir  # noqa: E402
 
 # Arrastar e soltar arquivos nao existe no tkinter. O tkinterdnd2 fornece isso
 # embutindo a extensao Tcl "tkdnd", com binarios para Linux e Windows. E uma
@@ -65,6 +66,9 @@ except Exception:  # noqa: BLE001 - qualquer falha de carga desativa o recurso
     DND_AVAILABLE = False
 
 APP_TITLE = f"Grand Chase 3D Importer {__version__}"
+
+#: Pasta de saida sugerida na primeira execucao, antes de existir um gc3d.ini.
+DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "gc3d_saida")
 
 
 def _merged_output_name(model_paths: list[str]) -> str:
@@ -252,7 +256,7 @@ def apply_dark_theme(root: tk.Tk) -> None:
 class ConverterApp(ttk.Frame):
     """Janela principal: uma tela, uma lista, um botao."""
 
-    def __init__(self, master: tk.Tk) -> None:
+    def __init__(self, master: tk.Tk, settings: Settings | None = None) -> None:
         super().__init__(master, padding=14)
         self.master.title(APP_TITLE)
         self.master.minsize(820, 620)
@@ -260,29 +264,135 @@ class ConverterApp(ttk.Frame):
         master.columnconfigure(0, weight=1)
         master.rowconfigure(0, weight=1)
 
+        #: Preferencias lidas do gc3d.ini ao lado do executavel.
+        self.settings = settings if settings is not None else Settings.load()
+
         #: Caminhos carregados, em ordem de insercao.
         self.paths: list[str] = []
         self.output_dir = tk.StringVar(
-            value=os.path.join(os.path.expanduser("~"), "gc3d_saida")
+            value=self.settings.pasta_saida or DEFAULT_OUTPUT_DIR
         )
+        #: Pasta onde os dialogos de arquivo abrem. Lembrada entre execucoes para
+        #: o usuario nao precisar navegar ate a pasta do jogo toda vez.
+        self.last_dir: str = self.settings.ultima_pasta_aberta
         self.direction_text = tk.StringVar()
         self.status = tk.StringVar(value="Pronto.")
         self.progress_value = tk.DoubleVar(value=0.0)
-        self.with_texture = tk.BooleanVar(value=True)
+        self.with_texture = tk.BooleanVar(value=self.settings.incluir_textura)
         #: Juntar todos os modelos e animacoes num unico .glb. Ligado por padrao:
         #: um personagem costuma vir em varios .p3m (corpo, rosto, arma) e um
         #: arquivo com tudo dentro e mais util que um arquivo por peca.
-        self.merge_all = tk.BooleanVar(value=True)
+        self.merge_all = tk.BooleanVar(value=self.settings.juntar_tudo)
 
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
+        #: Gravacao de preferencias agendada, para juntar rajadas de mudancas.
+        self._save_job: str | None = None
+        #: Barra gravacoes agendadas depois que a janela comecou a fechar.
+        self._closing = False
 
         self._build_ui()
+        # Digitar a pasta de saida a mao no campo tambem conta como mudanca; sem
+        # este observador, so o botao "Escolher..." seria lembrado.
+        self.output_dir.trace_add("write", self._on_output_typed)
+        self._restore_geometry()
+        # Fechar a janela pelo X tem que passar pelo nosso codigo, senao as
+        # preferencias nao seriam gravadas.
+        master.protocol("WM_DELETE_WINDOW", self._on_close)
         # Chama _refresh_list (nao _refresh_direction) para que a dica de lista
         # vazia seja posicionada ja na abertura.
         self._refresh_list()
         self.after(80, self._drain_queue)
+
+    # ----------------------------------------------------------- preferencias
+
+    def _restore_geometry(self) -> None:
+        """Devolve a janela ao tamanho da ultima vez, se ainda couber na tela.
+
+        A verificacao existe porque quem desconecta um monitor externo ficaria
+        com a janela restaurada fora da area visivel, sem jeito de traze-la de
+        volta. Guardamos apenas tamanho, nao posicao, o que evita o caso pior e
+        deixa o gerenciador de janelas centralizar.
+        """
+        saved = self.settings.janela.strip()
+        if not saved:
+            return
+        try:
+            width_text, height_text = saved.lower().split("x", 1)
+            width, height = int(width_text), int(height_text)
+        except ValueError:
+            return
+        if width < 820 or height < 620:
+            return
+        if width > self.master.winfo_screenwidth():
+            return
+        if height > self.master.winfo_screenheight():
+            return
+        self.master.geometry(f"{width}x{height}")
+
+    def _store_settings(self) -> None:
+        self.settings.pasta_saida = self.output_dir.get()
+        self.settings.ultima_pasta_aberta = self.last_dir
+        self.settings.incluir_textura = bool(self.with_texture.get())
+        self.settings.juntar_tudo = bool(self.merge_all.get())
+        self.settings.janela = (
+            f"{self.master.winfo_width()}x{self.master.winfo_height()}"
+        )
+
+    def _save_settings_soon(self) -> None:
+        """Agenda a gravacao das preferencias para daqui a pouco.
+
+        Gravar so ao fechar nao basta: se a sessao cair, o gerenciador de janelas
+        destruir a janela sem pedir licenca, ou o programa for encerrado a força,
+        o `WM_DELETE_WINDOW` nunca chega e tudo que o usuario ajustou se perde
+        calado. Gravando a cada mudanca, o pior caso passa a ser irrelevante.
+
+        O adiamento junta rajadas de eventos numa gravacao so — marcar duas
+        caixas seguidas, ou digitar um caminho letra por letra, nao escreve o
+        arquivo uma vez por tecla.
+        """
+        if self._closing:
+            return
+        if self._save_job is not None:
+            self.after_cancel(self._save_job)
+        try:
+            self._save_job = self.after(800, self._save_settings_now)
+        except tk.TclError:
+            # A janela ja foi destruida; nao ha mais o que agendar.
+            self._save_job = None
+
+    def _on_output_typed(self, *_ignored: object) -> None:
+        self._save_settings_soon()
+
+    def _save_settings_now(self) -> None:
+        self._save_job = None
+        self._store_settings()
+        self.settings.save()
+
+    def _on_close(self) -> None:
+        """Grava as preferencias e fecha.
+
+        Se uma conversao estiver rodando, pede confirmacao: fechar no meio
+        deixaria arquivos pela metade na pasta de saida.
+        """
+        if self._worker is not None and self._worker.is_alive():
+            if not messagebox.askyesno(
+                APP_TITLE,
+                "Uma conversao esta em andamento. Fechar agora pode deixar "
+                "arquivos incompletos na pasta de saida.\n\nFechar mesmo assim?",
+            ):
+                return
+            self._cancel.set()
+        self._closing = True
+        if self._save_job is not None:
+            self.after_cancel(self._save_job)
+            self._save_job = None
+        # Aqui, e nao no _save_settings_soon, e onde o tamanho da janela e
+        # capturado de verdade: e a ultima chance de le-lo antes do destroy().
+        self._store_settings()
+        self.settings.save()
+        self.master.destroy()
 
     # ------------------------------------------------------------------- UI
 
@@ -388,12 +498,13 @@ class ConverterApp(ttk.Frame):
             output,
             text="Incluir textura (embutir no .glb, ou extrair como .png)",
             variable=self.with_texture,
+            command=self._save_settings_soon,
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.merge_check = ttk.Checkbutton(
             output,
             text="Juntar tudo em um único .glb (modelos e animações)",
             variable=self.merge_all,
-            command=self._refresh_direction,
+            command=self._on_merge_toggled,
         )
         self.merge_check.grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
@@ -622,9 +733,16 @@ class ConverterApp(ttk.Frame):
             if path not in self.paths:
                 self.paths.append(path)
                 added += 1
+                # Lembra de onde veio o ultimo arquivo aceito, para o proximo
+                # dialogo abrir ali. Vale para o arrastar e soltar tambem.
+                folder = os.path.dirname(os.path.abspath(path))
+                if os.path.isdir(folder):
+                    self.last_dir = folder
         self._refresh_list()
         if added:
             self._log(f"{added} arquivo(s) adicionado(s). Total: {len(self.paths)}.")
+            # A pasta lembrada mudou; garante que sobreviva a um fim anormal.
+            self._save_settings_soon()
         if ignored:
             self._log(
                 f"{ignored} arquivo(s) ignorado(s): extensao nao suportada.", "muted"
@@ -633,6 +751,7 @@ class ConverterApp(ttk.Frame):
     def _add_files(self) -> None:
         paths = filedialog.askopenfilenames(
             title="Escolher arquivos",
+            initialdir=self._initial_dir(),
             filetypes=[
                 ("Todos os suportados", "*.p3m *.frm *.glb *.gltf"),
                 ("Modelos Grand Chase", "*.p3m"),
@@ -645,11 +764,24 @@ class ConverterApp(ttk.Frame):
         self._add_paths(list(paths))
 
     def _add_folder(self) -> None:
-        directory = filedialog.askdirectory(title="Escolher pasta")
+        directory = filedialog.askdirectory(
+            title="Escolher pasta", initialdir=self._initial_dir()
+        )
         if not directory:
             return
         models, animations, gltfs = collect_inputs([directory], recursive=True)
         self._add_paths(models + animations + gltfs)
+
+    def _initial_dir(self) -> str:
+        """Pasta onde os dialogos de arquivo devem abrir.
+
+        A pasta lembrada pode ter sido apagada ou estar num disco desconectado
+        desde a ultima execucao; nesse caso o tkinter ignora o pedido, mas
+        conferimos aqui para nao insistir num caminho morto.
+        """
+        if self.last_dir and os.path.isdir(self.last_dir):
+            return self.last_dir
+        return os.path.expanduser("~")
 
     def _remove_selected(self) -> None:
         for index in reversed(self.file_list.curselection()):
@@ -662,10 +794,19 @@ class ConverterApp(ttk.Frame):
 
     # --------------------------------------------------------------- saida
 
+    def _on_merge_toggled(self) -> None:
+        self._refresh_direction()
+        self._save_settings_soon()
+
     def _choose_output(self) -> None:
-        directory = filedialog.askdirectory(title="Escolher pasta de saida")
+        current = self.output_dir.get()
+        directory = filedialog.askdirectory(
+            title="Escolher pasta de saida",
+            initialdir=current if os.path.isdir(current) else self._initial_dir(),
+        )
         if directory:
             self.output_dir.set(directory)
+            self._save_settings_soon()
 
     def _open_output(self) -> None:
         directory = self.output_dir.get()
@@ -901,7 +1042,12 @@ class ConverterApp(ttk.Frame):
         self.after(80, self._drain_queue)
 
 
-def main() -> int:
+def main(preload: list[str] | None = None) -> int:
+    """Abre a janela.
+
+    `preload` recebe caminhos para ja entrar carregados na lista, usado quando o
+    usuario arrasta arquivos sobre o icone do programa.
+    """
     # A raiz precisa ser a do TkinterDnD para o arrastar e soltar funcionar; ela
     # e uma subclasse de tk.Tk que carrega a extensao Tcl. Sem o pacote, cai na
     # raiz normal e a janela funciona igual, so sem o recurso.
@@ -914,13 +1060,31 @@ def main() -> int:
         root = tk.Tk()
 
     apply_dark_theme(root)
-    app = ConverterApp(root)
+    settings = Settings.load()
+    app = ConverterApp(root, settings=settings)
     if not DND_AVAILABLE:
         app._log(
             "Arrastar e soltar indisponivel: instale com "
             "'pip install tkinterdnd2'. Os botoes de adicionar funcionam normalmente.",
             "muted",
         )
+
+    # Diz onde as preferencias moram. Importa quando a pasta do executavel e
+    # somente leitura e o arquivo foi para a pasta de configuracao do sistema:
+    # sem esta linha o usuario procuraria um gc3d.ini que nunca apareceu.
+    beside = os.path.join(executable_dir(), CONFIG_NAME)
+    if os.path.abspath(settings.path) == os.path.abspath(beside):
+        app._log(f"Configuracoes em {settings.path}", "muted")
+    else:
+        app._log(
+            f"A pasta do programa nao aceita gravacao; configuracoes em "
+            f"{settings.path}",
+            "aviso",
+        )
+
+    if preload:
+        app._add_paths([os.path.abspath(path) for path in preload])
+
     root.mainloop()
     return 0
 

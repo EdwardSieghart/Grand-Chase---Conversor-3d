@@ -108,6 +108,8 @@ teste de escrita não precisa mexer com bytes.
 | `formats/glb.py` | Escrever glTF 2.0 binário | P3M, FRM |
 | `formats/gltf_in.py` | Ler glTF 2.0, reamostrar animações | P3M, FRM |
 | `convert.py` | Detectar o sentido, amarrar tudo, coletar avisos, lote | interface |
+| `settings.py` | Preferências no `gc3d.ini`, e achar a pasta do executável | conversão |
+| `gc3d_app.py` | Escolher entre interface e linha de comando; console no Windows | formatos binários |
 | `gc3d_cli.py` / `gc3d_gui.py` | Interface com o usuário | formatos binários |
 
 Ler e escrever glTF ficam em módulos separados porque as duas metades quase não
@@ -470,27 +472,39 @@ conversão pela metade, o que evita arquivo truncado no disco.
 `build/` é organizado por plataforma para que as saídas não se misturem:
 
 ```
-build/common/gc3d.spec     receita compartilhada do PyInstaller
-build/linux/build.sh       ->  dist/linux/
-build/windows/build.bat    ->  dist\windows\   (rodando no Windows)
-build/windows/build_wine.sh ->  dist/windows/  (rodando no Linux, via Wine)
+build/common/gc3d.spec        receita do PyInstaller, um binário só
+build/icone/                  gerar_icone.py e o gc3d.png / gc3d.ico versionados
+build/exemplos.py             ->  release/GrandChase3D-<versão>-exemplos.zip
+build/linux/build.sh          ->  dist/linux/gc3d       (para testar localmente)
+build/linux/appimage.sh       ->  dist/*.AppImage       (em container Ubuntu 22.04)
+build/linux/appimage_interno.sh  monta o AppDir e empacota; roda no container
+build/windows/build.bat       ->  dist\windows\gc3d.exe (rodando no Windows)
 ```
 
-Duas decisões que custaram depuração:
+Três decisões que custaram depuração:
 
-**Sem `MERGE()`.** O `MERGE` do PyInstaller move as dependências compartilhadas
-para o primeiro executável. Isso funciona em build de pasta (onedir) e **quebra**
-em build de arquivo único: o segundo binário fica sem a `libpython` e morre no
-boot com *"Failed to load Python shared library"*. Dois `Analysis` independentes
-custam alguns megabytes a mais e cada binário roda por conta própria.
+**Um executável, e por isso sem `MERGE()`.** Antes eram dois binários, `gc3d` e
+`gc3d-gui`, e o `MERGE` do PyInstaller era tentador para não duplicar as
+dependências. Ele move as dependências compartilhadas para o primeiro executável,
+o que funciona em build de pasta (onedir) e **quebra** em arquivo único: o segundo
+binário fica sem a `libpython` e morre no boot com *"Failed to load Python shared
+library"*. Com um único ponto de entrada (`gc3d_app.py`) o problema deixou de
+existir, e o resultado ainda ficou menor que os dois binários somados.
 
-**Wine para o `.exe`.** O PyInstaller não faz cross-compile — empacota o
-interpretador da plataforma onde roda. `build_wine.sh` roda o PyInstaller *dentro
-do Wine*, sobre um Python para Windows baixado num prefixo próprio
-(`~/.gc3d-wine`, sem tocar no `~/.wine` do usuário). A distribuição embutida do
-Python não inclui tkinter, então o script tenta obter `_tkinter.pyd` e as
-bibliotecas Tcl/Tk do pacote NuGet do Python; se não conseguir, avisa que só o
-executável de linha de comando é confiável.
+**O `.exe` sai do CI, não do Wine.** O PyInstaller não faz compilação cruzada —
+empacota o interpretador da plataforma onde roda. Houve uma tentativa por Wine, e
+ela chegou a produzir o executável de linha de comando, mas **nunca** a interface:
+a `tcl86t.dll` não carrega ali, e o PyInstaller precisa importar o tkinter para
+analisar o módulo. Num Windows de verdade o problema não existe, e é o que o
+`.github/workflows/release.yml` fornece.
+
+**O AppImage é montado em container, e isso é obrigatório.** O PyInstaller liga o
+binário contra a glibc do ambiente, e glibc só é compatível para trás: compilado
+num sistema atual, o AppImage exige uma glibc que a maioria das máquinas não tem —
+o oposto do que um AppImage existe para resolver. O `appimage.sh` roda o build
+dentro de `ubuntu:22.04` (glibc 2.35), e a exigência resultante, medida com
+`objdump`, é exatamente 2.35. O `build.sh` sozinho serve para testar na própria
+máquina, não para distribuir.
 
 ---
 

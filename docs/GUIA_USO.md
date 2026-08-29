@@ -41,10 +41,14 @@ glTF ganha e o resto é reportado como ignorado.
 ## Interface gráfica
 
 ```bash
-python3 gc3d_gui.py       # pelo código
-./dist/linux/gc3d-gui     # executável Linux
-dist\windows\gc3d-gui.exe # executável Windows
+python3 gc3d_app.py                             # pelo código
+./GrandChase3D-1.6.0-x86_64.AppImage            # executável Linux
+GrandChase3D-1.6.0.exe                          # executável Windows
 ```
+
+É o mesmo arquivo da linha de comando: sem argumentos, ele abre a janela.
+Arrastar arquivos sobre o ícone do programa também abre a janela, já com eles
+carregados.
 
 ### Fluxo básico
 
@@ -131,6 +135,42 @@ quando foram usados, dizendo quantas alternativas existem. Com essas regras, os
 A busca é feita na pasta de cada modelo. Use `--texture-dir` na linha de comando
 para procurar em outras.
 
+### Suas preferências ficam guardadas
+
+A pasta de saída, a última pasta que você abriu, as duas caixas de opção e o
+tamanho da janela são lembrados entre execuções, num arquivo `gc3d.ini` **na mesma
+pasta do executável**.
+
+Isso deixa o programa portátil: leve o executável e o INI num pendrive e as suas
+configurações vão junto, sem deixar rastro na máquina emprestada.
+
+Para ver onde o arquivo está:
+
+```bash
+python3 gc3d_app.py config
+```
+
+O registro da interface também diz isso ao abrir. O arquivo pode ser editado à
+mão, com `sim` e `nao` nas opções de ligar e desligar:
+
+```ini
+[gc3d]
+pasta_saida = /home/eu/gc3d_saida
+ultima_pasta_aberta = /mnt/jogos/GRAND CHASE/Models
+incluir_textura = sim
+juntar_tudo = sim
+janela = 1000x740
+```
+
+Apagar o arquivo devolve tudo ao padrão. Se ele ficar ilegível ou com um valor
+inválido, o programa abre normalmente usando os padrões, em vez de recusar a
+iniciar.
+
+Quando a pasta do executável não aceita gravação — um `.exe` dentro de
+`Program Files`, um AppImage num cartão travado — as preferências vão para
+`~/.config/gc3d` ou `%APPDATA%\gc3d`, e a interface avisa no registro para você
+não procurar um arquivo que nunca apareceu.
+
 ---
 
 ## Linha de comando
@@ -140,7 +180,7 @@ para procurar em outras.
 Aceita os três formatos.
 
 ```bash
-python3 gc3d_cli.py info abta003.p3m
+python3 gc3d_app.py info abta003.p3m
 ```
 
 ```
@@ -158,7 +198,7 @@ O número em **angle bones** é o que precisa bater com o dos `.frm`. Para desco
 quais animações servem para um modelo:
 
 ```bash
-python3 gc3d_cli.py info animacoes/*.frm | grep -B3 "ossos              15"
+python3 gc3d_app.py info animacoes/*.frm | grep -B3 "ossos              15"
 ```
 
 Num glTF, `info` mostra o gerador, contagens e a lista de animações — útil para
@@ -168,30 +208,30 @@ conferir o que o Blender realmente exportou antes de converter.
 
 ```bash
 # extrair do jogo
-python3 gc3d_cli.py convert abta003.p3m -o saida/
-python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
-python3 gc3d_cli.py convert corpo.p3m rosto.p3m arma.p3m --merge -o saida/
-python3 gc3d_cli.py convert abta003.p3m -a andar.frm -a pular.frm -o saida/
-python3 gc3d_cli.py convert abta003.p3m -o modelos/elesis.glb
-python3 gc3d_cli.py convert abta003.p3m -o saida/ --texture-dir texturas/
+python3 gc3d_app.py convert abta003.p3m -o saida/
+python3 gc3d_app.py convert abta003.p3m --anim-dir animacoes/ -o saida/
+python3 gc3d_app.py convert corpo.p3m rosto.p3m arma.p3m --merge -o saida/
+python3 gc3d_app.py convert abta003.p3m -a andar.frm -a pular.frm -o saida/
+python3 gc3d_app.py convert abta003.p3m -o modelos/elesis.glb
+python3 gc3d_app.py convert abta003.p3m -o saida/ --texture-dir texturas/
 
 # voltar para o jogo
-python3 gc3d_cli.py convert personagem.glb -o saida/
-python3 gc3d_cli.py convert personagem.glb -o saida/ --no-animations
+python3 gc3d_app.py convert personagem.glb -o saida/
+python3 gc3d_app.py convert personagem.glb -o saida/ --no-animations
 ```
 
 ### `batch` — muitos arquivos
 
 ```bash
 # extrair uma pasta inteira, casando animações automaticamente
-python3 gc3d_cli.py batch "GRAND CHASE/Models" \
+python3 gc3d_app.py batch "GRAND CHASE/Models" \
     --anim-dir "GRAND CHASE/ANIMACOES" -o saida/
 
 # devolver uma pasta de modelos editados
-python3 gc3d_cli.py batch modelos_editados/ -o saida/
+python3 gc3d_app.py batch modelos_editados/ -o saida/
 
 # várias pastas, sem entrar em subpastas
-python3 gc3d_cli.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
+python3 gc3d_app.py batch Models/ Faces/ Armas/ --no-recursive -o saida/
 ```
 
 ### Todas as opções
@@ -452,6 +492,58 @@ sudo pacman -S tk                    # Arch
 
 A linha de comando funciona sem tkinter.
 
+Isso vale apenas para quem roda pelo código. Os executáveis prontos já trazem o
+tkinter dentro.
+
+### O AppImage não executa
+
+Se aparecer algo sobre `GLIBC_2.xx not found`, o seu sistema é mais antigo do que
+o AppImage suporta. Ele exige **glibc 2.35 ou mais nova**, o que cobre Ubuntu
+22.04+, Debian 12+, Fedora 36+ e RHEL 9+. Rode pelo código-fonte nesse caso.
+
+Se a mensagem falar de **fuse** ou `libfuse.so.2`, a sua distribuição não traz
+mais a biblioteca que monta AppImages. Duas saídas:
+
+```bash
+./GrandChase3D-1.6.0-x86_64.AppImage --appimage-extract-and-run
+sudo apt install libfuse2            # Debian, Ubuntu
+```
+
+E se nada acontecer ao dar duplo clique, provavelmente falta a permissão de
+execução:
+
+```bash
+chmod +x GrandChase3D-1.6.0-x86_64.AppImage
+```
+
+### No Windows, o prompt volta antes da saída do comando
+
+É esperado, e não é defeito. O `.exe` é compilado no subsistema gráfico para que
+o clique duplo não abra uma janela preta atrás da interface. O preço é que o
+`cmd` não espera um programa gráfico terminar, então ele devolve o prompt e a
+saída aparece depois, misturada com o prompt novo.
+
+Em script, force a espera:
+
+```bat
+start /wait GrandChase3D-1.6.0.exe convert modelo.p3m -o saida\
+```
+
+Redirecionar para arquivo com `>` e canalizar com `|` funcionam normalmente.
+
+### Minhas configurações não foram guardadas
+
+Veja onde o programa está gravando:
+
+```bash
+python3 gc3d_app.py config
+```
+
+Se a linha `arquivo em uso` apontar para `~/.config/gc3d` ou `%APPDATA%`, a pasta
+do executável não aceita gravação — é o caso de um `.exe` dentro de
+`Program Files`. Mova o executável para uma pasta sua, como a Área de Trabalho ou
+Documentos, se quiser o comportamento portátil.
+
 ### Como saber se um arquivo gerado está bom
 
 ```bash
@@ -459,7 +551,7 @@ A linha de comando funciona sem tkinter.
 python3 tools/glb_inspect.py inspect saida/abta003.glb
 
 # um P3M que você acabou de gerar
-python3 gc3d_cli.py info saida/personagem.p3m
+python3 gc3d_app.py info saida/personagem.p3m
 
 # ida e volta completa, comparando com o original
 python3 tools/roundtrip_check.py --anim-dir animacoes/ modelos/

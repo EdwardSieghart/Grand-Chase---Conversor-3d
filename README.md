@@ -40,70 +40,83 @@ que traz vantagens concretas:
 
 ## Instalação
 
+### Baixando o executável (recomendado)
+
+Um arquivo por sistema, na [página de
+Releases](https://github.com/EdwardSieghart/Grand-Chase---Conversor-3d/releases).
+Nada para instalar, nada de Python:
+
+| Sistema | Arquivo | Requisito |
+|---------|---------|-----------|
+| Windows | `GrandChase3D-<versão>.exe` | Windows 10 ou mais novo |
+| Linux | `GrandChase3D-<versão>-x86_64.AppImage` | glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 9+) |
+
+No Linux, marque como executável antes do primeiro uso:
+
+```bash
+chmod +x GrandChase3D-*-x86_64.AppImage
+```
+
+**Abrir sem argumentos abre a interface gráfica.** O mesmo arquivo também é a
+linha de comando — não há dois programas:
+
+```bash
+./GrandChase3D-1.6.0-x86_64.AppImage                          # interface
+./GrandChase3D-1.6.0-x86_64.AppImage convert modelo.p3m -o .  # linha de comando
+```
+
+Arrastar arquivos sobre o ícone do programa abre a interface com eles já
+carregados.
+
+Há também um `GrandChase3D-<versão>-exemplos.zip` na mesma página, com alguns
+modelos e uma animação do jogo, para o primeiro teste não depender de você já ter
+extraído arquivos.
+
+Se a sua distribuição não tiver mais a `libfuse2`, rode o AppImage com
+`--appimage-extract-and-run`.
+
 ### Rodando pelo Python (qualquer sistema)
 
 Precisa apenas de **Python 3.10 ou mais novo**. Nenhum `pip install`.
 
 ```bash
-git clone https://github.com/<seu-usuario>/grand-chase-3d-importer.git
-cd grand-chase-3d-importer
+git clone https://github.com/EdwardSieghart/Grand-Chase---Conversor-3d.git
+cd Grand-Chase---Conversor-3d
 
-python3 gc3d_gui.py          # interface gráfica
-python3 gc3d_cli.py --help   # linha de comando
+python3 gc3d_app.py            # interface gráfica
+python3 gc3d_app.py --help     # linha de comando
 ```
 
 No Windows, use `python` em vez de `python3`. Ao instalar o Python, deixe marcado
 **"tcl/tk and IDLE"** (vem marcado por padrão) — é o que fornece a interface.
 
-### Pacotes prontos, uma pasta por sistema
+### Compilando você mesmo
+
+Não é preciso: o [GitHub Actions](.github/workflows/release.yml) compila os dois
+executáveis a cada tag `v*` e os anexa à Release. Para compilar localmente:
 
 ```bash
-python3 build/empacotar.py --zip
-```
-
-Monta duas pastas autocontidas em `release/`:
-
-```
-release/
-├── GrandChase3D-Linux/
-│   ├── Converter.sh            abre a interface
-│   ├── Linha de comando.sh     abre um terminal com o comando gc3d
-│   ├── LEIA-ME.txt
-│   ├── gc3d, gc3d-gui          executáveis, se tiverem sido compilados
-│   ├── app/                    código Python (usado se não houver executável)
-│   └── exemplos/               arquivos do jogo para testar na hora
-└── GrandChase3D-Windows/
-    ├── Converter.bat
-    ├── Linha de comando.bat
-    └── ... o mesmo, com gc3d.exe e gc3d-gui.exe
-```
-
-Os lançadores funcionam **com ou sem** executável compilado: se o binário está na
-pasta, é ele que roda; se não, o script chama o Python sobre o código em `app/`.
-Assim a pasta serve tanto para quem baixou o pacote pronto quanto para quem só
-tem o código.
-
-### Compilando os executáveis
-
-```bash
-# Linux  ->  dist/linux/
+# Linux, para testar na sua própria máquina  ->  dist/linux/gc3d
 ./build/linux/build.sh
 
-# Windows, rodando no Windows  ->  dist\windows\
-build\windows\build.bat
+# Linux, o AppImage distribuível  ->  dist/GrandChase3D-<versão>-x86_64.AppImage
+./build/linux/appimage.sh
 
-# Windows, a partir do Linux, usando Wine  ->  dist/windows/
-./build/windows/build_wine.sh
+# Windows, rodando no Windows  ->  dist\windows\gc3d.exe
+build\windows\build.bat
 ```
 
-Precisa do PyInstaller (`pip install pyinstaller`) apenas para gerar; os binários
-resultantes não dependem de nada instalado. Depois de compilar, rode
-`build/empacotar.py` de novo para que os pacotes incluam os executáveis.
+Precisa do PyInstaller (`pip install pyinstaller`) apenas para gerar; o binário
+resultante não depende de nada instalado.
 
-O PyInstaller não faz cross-compile — ele empacota o interpretador da plataforma
-onde roda. O script `build_wine.sh` resolve isso rodando o PyInstaller **dentro
-do Wine**, sobre um Python para Windows que ele baixa e instala num prefixo
-próprio (`~/.gc3d-wine`, sem tocar no `~/.wine` do usuário).
+O `appimage.sh` roda o build **dentro de um container Ubuntu 22.04** (podman ou
+docker), e isso não é frescura: o PyInstaller liga o binário contra a glibc da
+máquina onde roda, e glibc só é compatível para trás. Compilado num sistema
+atual, o AppImage exigiria uma glibc que a maioria das máquinas não tem. O
+`build.sh` sozinho serve para testar, não para distribuir.
+
+O PyInstaller também não faz compilação cruzada, então o `.exe` precisa de um
+Windows de verdade — é o que o CI fornece.
 
 ---
 
@@ -112,7 +125,7 @@ próprio (`~/.gc3d-wine`, sem tocar no `~/.wine` do usuário).
 ### Interface gráfica
 
 ```bash
-python3 gc3d_gui.py       # ou ./dist/linux/gc3d-gui  /  dist\windows\gc3d-gui.exe
+python3 gc3d_app.py       # ou ./dist/linux/gc3d  /  dist\windows\gc3d.exe
 ```
 
 Uma tela só, tema escuro:
@@ -139,27 +152,73 @@ O arrastar e soltar depende do pacote opcional `tkinterdnd2`. Os executáveis
 prontos já o incluem; rodando pelo Python, instale com
 `pip install tkinterdnd2` — sem ele a janela funciona igual, só pelos botões.
 
+### Onde ficam as suas configurações
+
+Num arquivo `gc3d.ini` **na mesma pasta do executável**. Isso deixa o programa
+portátil: leve o executável e o INI num pendrive e as suas preferências vão
+junto, sem deixar rastro na máquina emprestada.
+
+Ficam guardados a pasta de saída, a última pasta que você abriu, as duas caixas de
+opção e o tamanho da janela. O arquivo é gravado a cada mudança, não só ao fechar,
+e pode ser editado à mão — use `sim` e `nao` nas opções:
+
+```ini
+[gc3d]
+pasta_saida = /home/eu/gc3d_saida
+incluir_textura = sim
+juntar_tudo = sim
+```
+
+Para ver onde ele está:
+
+```bash
+gc3d config
+```
+
+Se a pasta do executável não aceitar gravação (um `.exe` dentro de
+`Program Files`, ou um AppImage em mídia travada), as preferências vão para
+`~/.config/gc3d` ou `%APPDATA%\gc3d`, e a interface avisa no registro. Apagar o
+arquivo devolve tudo ao padrão.
+
 ### Linha de comando
 
 ```bash
 # extrair do jogo
-python3 gc3d_cli.py convert abta003.p3m --anim-dir animacoes/ -o saida/
+python3 gc3d_app.py convert abta003.p3m --anim-dir animacoes/ -o saida/
 
-# devolver para o jogo (gera .p3m, .frm e .png)
-python3 gc3d_cli.py convert personagem.glb -o saida/
+# devolver para o jogo (gera .p3m, .frm e .dds)
+python3 gc3d_app.py convert personagem.glb -o saida/
 
 # um personagem inteiro (varios .p3m) num unico .glb
-python3 gc3d_cli.py convert corpo.p3m rosto.p3m arma.p3m --merge \
+python3 gc3d_app.py convert corpo.p3m rosto.p3m arma.p3m --merge \
     --anim-dir animacoes/ -o saida/
 
 # pastas inteiras, em qualquer sentido
-python3 gc3d_cli.py batch "GRAND CHASE/Models" --anim-dir animacoes/ -o saida/
-python3 gc3d_cli.py batch "GRAND CHASE/Models" --merge -o saida/   # tudo num arquivo
-python3 gc3d_cli.py batch modelos_editados/ -o saida/
+python3 gc3d_app.py batch "GRAND CHASE/Models" --anim-dir animacoes/ -o saida/
+python3 gc3d_app.py batch "GRAND CHASE/Models" --merge -o saida/   # tudo num arquivo
+python3 gc3d_app.py batch modelos_editados/ -o saida/
 
 # inspecionar sem converter (aceita os três formatos)
-python3 gc3d_cli.py info abta003.p3m 4528.frm personagem.glb
+python3 gc3d_app.py info abta003.p3m 4528.frm personagem.glb
+
+# onde estao as configuracoes
+python3 gc3d_app.py config
 ```
+
+Trocando `python3 gc3d_app.py` pelo executável baixado, os comandos são os
+mesmos:
+
+```bash
+./GrandChase3D-1.6.0-x86_64.AppImage convert abta003.p3m -o saida/
+GrandChase3D-1.6.0.exe convert abta003.p3m -o saida/
+```
+
+No Windows há um detalhe: o `.exe` é compilado no subsistema gráfico, para o
+clique duplo não abrir uma janela preta atrás da interface. A saída aparece
+normalmente no `cmd`, mas o prompt volta antes dela, porque o Windows não faz o
+`cmd` esperar um programa gráfico terminar. Em script, use
+`start /wait GrandChase3D-1.6.0.exe ...`. Redirecionar para arquivo com `>` e
+canalizar com `|` funcionam como o esperado.
 
 Opções que costumam ser úteis:
 
@@ -236,6 +295,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 
 ```
 .
+├── gc3d_app.py            Ponto de entrada único: decide entre interface e CLI
 ├── gc3d_cli.py            Linha de comando
 ├── gc3d_gui.py            Interface gráfica (tkinter, tema escuro)
 ├── src/gc3d/
@@ -243,6 +303,7 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │   ├── mathutil.py        Vetores, matrizes 4x4, quaternions, slerp
 │   ├── scene.py           Representação intermediária
 │   ├── textures.py        DDS → RGBA → PNG, em Python puro
+│   ├── settings.py        Preferências no gc3d.ini ao lado do executável
 │   ├── convert.py         Pipeline nos dois sentidos
 │   └── formats/
 │       ├── p3m.py         Modelos: lê e escreve
@@ -250,19 +311,26 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 │       ├── glb.py         Escreve glTF 2.0 binário
 │       └── gltf_in.py     Lê glTF 2.0 (.glb e .gltf)
 ├── requirements-optional.txt  Dependências opcionais (drag and drop, build)
-├── tests/                 205 testes, só com a biblioteca padrão
+├── tests/                 239 testes, só com a biblioteca padrão
 ├── tools/
 │   ├── glb_inspect.py     Inspeciona, valida e compara GLB
 │   ├── validate_all.py    Validação em massa da direção direta
 │   ├── roundtrip_check.py Validação de ida e volta
 │   ├── blender_check.py   Importa no Blender e confere o resultado
-│   ├── blender_reexport.py Reexporta pelo Blender (teste de interoperabilidade)
-│   └── publicar_github.sh Publica o repositório
+│   └── blender_reexport.py Reexporta pelo Blender (interoperabilidade)
 ├── samples/               Arquivos reais do jogo para teste
 ├── build/
-│   ├── common/gc3d.spec   Receita compartilhada do PyInstaller
-│   ├── linux/build.sh     Build Linux      -> dist/linux/
-│   └── windows/           build.bat (no Windows) e build_wine.sh (do Linux)
+│   ├── common/gc3d.spec   Receita do PyInstaller (um binário)
+│   ├── icone/             gerar_icone.py e o gc3d.png / gc3d.ico versionados
+│   ├── exemplos.py        Monta o zip de exemplos da Release
+│   ├── linux/
+│   │   ├── build.sh       Binário Linux para teste  -> dist/linux/
+│   │   ├── appimage.sh    AppImage distribuível, em container Ubuntu 22.04
+│   │   └── appimage_interno.sh  Monta o AppDir e empacota (roda no container)
+│   └── windows/build.bat  gc3d.exe, rodando no Windows
+├── .github/workflows/
+│   ├── testes.yml         Suíte em Linux e Windows a cada push
+│   └── release.yml        Compila os dois executáveis e publica na tag
 └── docs/
     ├── ESPECIFICACAO_FORMATOS.md   Layout byte a byte de P3M, FRM e BON
     ├── ARQUITETURA.md              Como o código está organizado e por quê
@@ -279,7 +347,8 @@ quantiza os tempos dos keyframes no FPS da cena, e um FPS baixo perde precisão.
 python3 -m unittest discover -s tests -t .
 ```
 
-205 testes, sem dependências. Validações mais pesadas, sobre arquivos reais:
+239 testes, sem dependências. Rodam também no [CI](.github/workflows/testes.yml),
+em Linux e Windows, a cada push. Validações mais pesadas, sobre arquivos reais:
 
 ```bash
 # direção direta: lê tudo e confere os GLB gerados
@@ -323,8 +392,6 @@ Detalhes, metodologia e os bugs que a validação encontrou em
 - **Interpolação linear** nas animações. O jogo usa curvas Bézier com tangentes
   desconhecidas; a 55 Hz a diferença é desprezível.
 - **Um material por modelo.** O P3M v0.5 tem só um campo de textura.
-- **A textura volta como `.png`**, não como `.dds`. Converta com uma ferramenta
-  de imagem se o alvo exigir DDS.
 
 ---
 

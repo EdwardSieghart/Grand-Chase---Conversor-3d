@@ -442,6 +442,38 @@ def cmd_info(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------- parser
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    """Mostra onde as preferencias moram e o que tem nelas.
+
+    Serve para responder "onde ficam minhas configuracoes?" sem o usuario ter de
+    adivinhar, e e o unico jeito de conferir, de fora, que o programa empacotado
+    localiza a propria pasta corretamente — o que muda entre rodar pelo
+    codigo-fonte, por um .exe e por um AppImage.
+    """
+    from gc3d.settings import CONFIG_NAME, Settings, executable_dir, fallback_dir
+
+    destino = Settings.load()
+    ao_lado = os.path.join(executable_dir(), CONFIG_NAME)
+
+    print(f"pasta do programa   {executable_dir()}")
+    print(f"arquivo em uso      {destino.path}")
+    print(f"existe              {'sim' if os.path.isfile(destino.path) else 'ainda nao'}")
+    if os.path.abspath(destino.path) != os.path.abspath(ao_lado):
+        print(f"reserva do sistema  {fallback_dir()}")
+        print(
+            "                    (a pasta do programa nao aceita gravacao, "
+            "por isso a reserva)"
+        )
+    print()
+    print("valores atuais")
+    print(f"  pasta de saida     {destino.pasta_saida or '(padrao)'}")
+    print(f"  ultima pasta       {destino.ultima_pasta_aberta or '(nenhuma)'}")
+    print(f"  incluir textura    {'sim' if destino.incluir_textura else 'nao'}")
+    print(f"  juntar tudo        {'sim' if destino.juntar_tudo else 'nao'}")
+    print(f"  janela             {destino.janela or '(padrao)'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gc3d",
@@ -581,6 +613,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     info.add_argument("inputs", nargs="+", help="arquivos a inspecionar")
     info.set_defaults(func=cmd_info)
+
+    config = subparsers.add_parser(
+        "config",
+        help="mostra onde as preferencias da interface sao gravadas",
+    )
+    config.set_defaults(func=cmd_config)
 
     return parser
 

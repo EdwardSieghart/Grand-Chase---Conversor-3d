@@ -1,0 +1,299 @@
+name: release
+
+# Gera os dois executaveis distribuiveis e os anexa a Release da tag.
+#
+#     git tag -a v1.6.0 -m "..." && git push origin v1.6.0
+#
+# Saem daqui dois arquivos, um por sistema, cada um autossuficiente:
+#
+#     GrandChase3D-<versao>.exe             Windows
+#     GrandChase3D-<versao>-x86_64.AppImage Linux
+#
+# POR QUE O CI E NAO A MAQUINA LOCAL
+#
+# O PyInstaller nao faz compilacao cruzada: ele empacota o interpretador da
+# plataforma onde roda. Antes tentavamos gerar o .exe pelo Wine, e a interface
+# grafica nunca saiu — a tcl86t.dll nao carrega ali. Num Windows de verdade o
+# problema simplesmente nao existe.
+#
+# Rodar com workflow_dispatch compila e testa tudo, mas NAO publica nada. Serve
+# para conferir o build antes de criar a tag.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------------------------- versao
+  versao:
+    runs-on: ubuntu-latest
+    outputs:
+      numero: ${{ steps.ler.outputs.numero }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: ler
+        # A versao vive em src/gc3d/__init__.py e e a unica fonte da verdade; os
+        # nomes dos arquivos saem dela, nao da tag.
+        run: |
+          numero=$(python3 -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/gc3d/__init__.py').read_text()).group(1))")
+          echo "numero=$numero" >> "$GITHUB_OUTPUT"
+          echo "versao do codigo: $numero"
+
+      - name: Conferir se a tag combina com a versao do codigo
+        if: startsWith(github.ref, 'refs/tags/v')
+        # Tag v1.6.0 com o codigo dizendo 1.5.0 geraria arquivos com o nome
+        # errado e uma Release mentindo a versao. Melhor falhar aqui.
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          codigo="${{ steps.ler.outputs.numero }}"
+          if [ "$tag" != "$codigo" ]; then
+              echo "::error::a tag diz $tag mas src/gc3d/__init__.py diz $codigo"
+              exit 1
+          fi
+          echo "tag e codigo combinam: $tag"
+
+  # ------------------------------------------------------------------ Windows
+  windows:
+    needs: versao
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: python -m pip install --quiet "pyinstaller>=6.0" "tkinterdnd2==0.6.2" pytest
+
+      - name: Rodar a suite
+        run: python -m pytest tests -q
+
+      - name: Compilar o .exe
+        run: build\windows\build.bat
+
+      # O teste de fumaca precisa de Start-Process -Wait, e a razao merece ficar
+      # registrada: o .exe e do subsistema grafico, entao quem o chama NAO espera
+      # ele terminar. Chamado direto, o passo seguiria antes de o programa
+      # escrever qualquer coisa, e o teste passaria sem testar nada.
+      - name: Teste de fumaca no Windows de verdade
+        shell: pwsh
+        run: |
+          $exe = "dist\windows\gc3d.exe"
+
+          function Rodar($argumentos, $saida) {
+              $processo = Start-Process -FilePath $exe -ArgumentList $argumentos `
+                  -NoNewWindow -Wait -PassThru `
+                  -RedirectStandardOutput $saida -RedirectStandardError "$saida.err"
+              return $processo.ExitCode
+          }
+
+          # --version. Redirecionar para arquivo exercita justamente o caminho
+          # dos identificadores herdados em gc3d_app.attach_console(), que e o
+          # que faz a saida cair no arquivo em vez de no console.
+          $codigo = Rodar @('--version') 'versao.txt'
+          $texto = (Get-Content 'versao.txt' -Raw).Trim()
+          Write-Host "--version devolveu $codigo e escreveu: '$texto'"
+          if ($codigo -ne 0) { throw "--version saiu com $codigo" }
+          if ($texto.Length -eq 0) {
+              throw "o redirecionamento nao funcionou: arquivo vazio"
+          }
+          $numero = [regex]::Escape('${{ needs.versao.outputs.numero }}')
+          if ($texto -notmatch $numero) {
+              throw "esperava a versao ${{ needs.versao.outputs.numero }}, veio '$texto'"
+          }
+
+          # O .exe acha a propria pasta? E o caso que muda entre codigo-fonte e
+          # empacotado, e onde o gc3d.ini vai morar.
+          $codigo = Rodar @('config') 'config.txt'
+          Get-Content 'config.txt'
+          if ($codigo -ne 0) { throw "config saiu com $codigo" }
+          $esperado = (Resolve-Path 'dist\windows').Path
+          if ((Get-Content 'config.txt' -Raw) -notmatch [regex]::Escape($esperado)) {
+              throw "o exe nao reconheceu a propria pasta ($esperado)"
+          }
+
+          # Conversao de ida e volta, com um modelo de verdade do repositorio.
+          $modelo = (Get-ChildItem -Recurse samples -Filter *.p3m | Select-Object -First 1).FullName
+          Write-Host "modelo de teste: $modelo"
+
+          $codigo = Rodar @('convert', $modelo, '-o', 'ida') 'ida.txt'
+          Get-Content 'ida.txt'
+          if ($codigo -ne 0) { throw "a ida saiu com $codigo" }
+          $glb = Get-ChildItem 'ida' -Filter *.glb
+          if (-not $glb) { throw "nenhum .glb foi gerado" }
+
+          $codigo = Rodar @('convert', $glb[0].FullName, '-o', 'volta') 'volta.txt'
+          Get-Content 'volta.txt'
+          if ($codigo -ne 0) { throw "a volta saiu com $codigo" }
+          if (-not (Get-ChildItem 'volta' -Filter *.p3m)) { throw "nenhum .p3m na volta" }
+          if (-not (Get-ChildItem 'volta' -Filter *.dds)) { throw "nenhuma textura .dds na volta" }
+
+          # Codigo de erro em arquivo que nao existe: scripts dependem disso.
+          $codigo = Rodar @('info', 'nao-existe.p3m') 'erro.txt'
+          if ($codigo -eq 0) { throw "arquivo inexistente devia dar codigo diferente de zero" }
+
+          Write-Host "teste de fumaca completo"
+
+      - name: Nomear o arquivo final
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path entrega | Out-Null
+          Copy-Item 'dist\windows\gc3d.exe' `
+              "entrega\GrandChase3D-${{ needs.versao.outputs.numero }}.exe"
+          Get-ChildItem entrega
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: entrega/*.exe
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------- Linux
+  linux:
+    needs: versao
+    runs-on: ubuntu-latest
+    # Container, e nao o rotulo ubuntu-22.04: aquela imagem de runner entra em
+    # depreciacao em setembro de 2026 e sai de suporte em abril de 2027
+    # (actions/runner-images#14254). A imagem do Docker Hub nao tem essa validade,
+    # e e a MESMA coisa que build/linux/appimage.sh usa localmente.
+    #
+    # 22.04 e escolhido pela glibc 2.35: o PyInstaller liga o binario contra a
+    # glibc do ambiente, e ela so tem compatibilidade para tras. Compilando em
+    # imagem mais nova, o AppImage nao abriria em maquina mais antiga.
+    container:
+      image: ubuntu:22.04
+    steps:
+      # Antes do checkout de proposito: a imagem crua nao tem git, e sem ele o
+      # actions/checkout cai para baixar um zip pela API.
+      - name: Preparar o container
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+              git python3 python3-pip python3-tk python3-dev \
+              binutils file curl ca-certificates zsync desktop-file-utils \
+              xvfb
+
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet "pyinstaller>=6.0" "tkinterdnd2==0.6.2" pytest
+
+      - name: Rodar a suite
+        run: xvfb-run -a python3 -m pytest tests -q
+
+      - name: Montar o AppImage
+        run: ./build/linux/appimage_interno.sh
+
+      - name: Teste de fumaca
+        run: |
+          set -euo pipefail
+          arquivo="dist/GrandChase3D-${{ needs.versao.outputs.numero }}-x86_64.AppImage"
+          test -x "$arquivo"
+
+          # Container nao tem FUSE, e montar um AppImage depende dela. Com esta
+          # opcao o proprio AppImage se descompacta e roda. Vale saber que muitas
+          # distribuicoes atuais tambem nao trazem mais a libfuse2, e o usuario
+          # final pode precisar da mesma opcao.
+          rodar() { "./$arquivo" --appimage-extract-and-run "$@"; }
+
+          rodar --version
+          rodar config
+
+          modelo=$(find samples -name '*.p3m' | head -1)
+          echo "modelo de teste: $modelo"
+          rodar convert "$modelo" -o ida
+          test -n "$(find ida -name '*.glb')"
+          rodar convert "$(find ida -name '*.glb' | head -1)" -o volta
+          test -n "$(find volta -name '*.p3m')"
+          test -n "$(find volta -name '*.dds')"
+
+          if rodar info nao-existe.p3m; then
+              echo "::error::arquivo inexistente devia dar codigo diferente de zero"
+              exit 1
+          fi
+
+          # A promessa de portabilidade e verificavel: conferimos a maior versao
+          # de glibc exigida pelas bibliotecas embutidas. Se algum dia isso subir
+          # sem querer, o AppImage para de abrir nas maquinas mais antigas e
+          # ninguem percebe — por isso o numero aparece no log.
+          "./$arquivo" --appimage-extract >/dev/null
+          maior=$(for f in squashfs-root/usr/bin/gc3d; do objdump -T "$f"; done 2>/dev/null \
+              | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
+          echo "glibc exigida pelo carregador: $maior"
+
+          echo "teste de fumaca completo"
+
+      - name: Nomear o arquivo final
+        run: |
+          mkdir -p entrega
+          cp "dist/GrandChase3D-${{ needs.versao.outputs.numero }}-x86_64.AppImage" entrega/
+          ls -lh entrega
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: entrega/*.AppImage
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------- publicar
+  publicar:
+    needs: [versao, windows, linux]
+    # Só publica em tag. Com workflow_dispatch os arquivos ficam como artefatos
+    # do job, para conferencia, sem criar Release nenhuma.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: entrega
+          merge-multiple: true
+
+      - run: ls -lh entrega
+
+      - name: Criar a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSAO: ${{ needs.versao.outputs.numero }}
+        run: |
+          cat > notas.md <<'NOTAS'
+          Um arquivo por sistema. Nada para instalar, nada de Python: baixe,
+          torne executavel se preciso, e abra.
+
+          | Sistema | Arquivo |
+          | --- | --- |
+          | Windows | `GrandChase3D-VERSAO.exe` |
+          | Linux | `GrandChase3D-VERSAO-x86_64.AppImage` |
+
+          **Abrir sem argumentos abre a interface grafica.** O mesmo arquivo
+          tambem e a linha de comando:
+
+              GrandChase3D-VERSAO.exe convert modelo.p3m -o saida/
+              ./GrandChase3D-VERSAO-x86_64.AppImage info modelo.p3m
+
+          As preferencias ficam num `gc3d.ini` na mesma pasta do executavel, o
+          que torna o programa portatil — leve os dois num pendrive e as suas
+          configuracoes vao junto. Use `config` para ver onde estao.
+
+          No Linux, marque como executavel antes do primeiro uso:
+
+              chmod +x GrandChase3D-VERSAO-x86_64.AppImage
+
+          Requer glibc 2.35 ou mais nova, o que cobre Ubuntu 22.04+, Debian 12+,
+          Fedora 36+ e RHEL 9+. Em distribuicao sem a libfuse2, rode com
+          `--appimage-extract-and-run`.
+          NOTAS
+          sed -i "s/VERSAO/$VERSAO/g" notas.md
+
+          gh release create "v$VERSAO" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Conversor $VERSAO" \
+              --notes-file notas.md \
+              entrega/*

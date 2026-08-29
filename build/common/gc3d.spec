@@ -1,27 +1,33 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Receita compartilhada do PyInstaller, usada pelos dois sistemas.
+"""Receita do PyInstaller: UM executavel, para Linux e Windows.
 
-Gera dois binarios a partir do mesmo codigo:
-
-* `gc3d`      — linha de comando (console)
-* `gc3d-gui`  — interface grafica (sem janela de console no Windows)
+Gera um binario so, `gc3d`, a partir de `gc3d_app.py`. Ele decide entre abrir a
+interface e agir como linha de comando conforme os argumentos recebidos.
 
 Nao chame este arquivo direto; use os scripts por plataforma:
 
-    build/linux/build.sh          gera binarios Linux em dist/linux/
-    build/windows/build.bat       gera .exe em dist\\windows\\  (rodar no Windows)
-    build/windows/build_wine.sh   gera .exe a partir do Linux, usando Wine
+    build/linux/build.sh          binario Linux em dist/linux/
+    build/linux/appimage.sh       AppImage em dist/ (roda em container)
+    build/windows/build.bat       gc3d.exe em dist\\windows\\  (rodar no Windows)
+
+Antes eram dois binarios, `gc3d` e `gc3d-gui`, e havia um comentario longo aqui
+explicando por que MERGE() estava fora: ele move as dependencias compartilhadas
+para o primeiro executavel, o que funciona em build de pasta mas quebra em
+arquivo unico, deixando o segundo binario sem a libpython. Com um executavel so
+o problema deixa de existir.
 
 O nome da pasta de saida vem da variavel de ambiente GC3D_DIST_NAME, definida
 pelos scripts, para que Linux e Windows nao sobrescrevam um ao outro.
 """
 
 import os
+import sys
 
 # O .spec e executado com exec(), sem __file__ confiavel; o PyInstaller define
 # SPECPATH com o diretorio do arquivo.
 PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))  # noqa: F821
 SRC = os.path.join(PROJECT_ROOT, "src")
+ICONE = os.path.join(PROJECT_ROOT, "build", "icone")
 
 # O pacote nao tem dependencias externas; excluimos modulos grandes da
 # biblioteca padrao que o PyInstaller as vezes puxa por engano, para o binario
@@ -43,79 +49,69 @@ EXCLUDES = [
     "xml",
 ]
 
-# NAO usamos MERGE(): ele move as dependencias compartilhadas para o primeiro
-# executavel, o que funciona em build de pasta (onedir) mas quebra em build de
-# arquivo unico — o segundo binario fica sem a libpython e morre no boot com
-# "Failed to load Python shared library". Dois Analysis independentes custam
-# alguns megabytes a mais e cada binario roda por conta propria.
+# gc3d_cli e gc3d_gui ficam na raiz do projeto e sao importados sob demanda
+# dentro de gc3d_app, so quando o caminho correspondente e escolhido. Import
+# dentro de funcao o PyInstaller encontra, mas import de modulo que nao esta em
+# nenhum pacote precisa da raiz no pathex, senao a analise nao acha o arquivo.
+HIDDEN = ["gc3d", "gc3d.formats", "gc3d.settings", "gc3d_cli", "gc3d_gui"]
 
 # O arrastar e soltar depende do tkinterdnd2, que carrega uma extensao Tcl a
 # partir de arquivos em disco. O PyInstaller nao descobre esses arquivos sozinho,
 # porque nao sao imports: e preciso declara-los como `datas`. Se o pacote nao
 # estiver instalado, o build segue sem o recurso — a interface detecta a ausencia
 # em tempo de execucao e continua funcionando pelos botoes.
-GUI_DATAS = []
-GUI_HIDDEN = ["gc3d", "gc3d.formats"]
+DATAS = []
 try:
     from PyInstaller.utils.hooks import collect_data_files  # noqa: F821
 
-    GUI_DATAS = collect_data_files("tkinterdnd2")
-    if GUI_DATAS:
-        GUI_HIDDEN.append("tkinterdnd2")
-        print(f"[gc3d.spec] tkinterdnd2 incluido ({len(GUI_DATAS)} arquivos)")
+    DATAS = collect_data_files("tkinterdnd2")
+    if DATAS:
+        HIDDEN.append("tkinterdnd2")
+        print(f"[gc3d.spec] tkinterdnd2 incluido ({len(DATAS)} arquivos)")
     else:
         print("[gc3d.spec] tkinterdnd2 nao encontrado: sem arrastar e soltar")
 except Exception as error:  # noqa: BLE001
     print(f"[gc3d.spec] tkinterdnd2 nao incluido: {error}")
 
-cli_analysis = Analysis(  # noqa: F821
-    [os.path.join(PROJECT_ROOT, "gc3d_cli.py")],
-    pathex=[SRC],
-    binaries=[],
-    datas=[],
-    hiddenimports=["gc3d", "gc3d.formats"],
-    excludes=EXCLUDES + ["tkinter"],
-    noarchive=False,
-)
+# O icone entra no .exe pelo parametro do EXE. No Linux o PyInstaller ignora
+# icone, e quem cuida da aparencia e o .desktop do AppImage, que aponta para o
+# gc3d.png. Nao vale abortar o build por falta de arte.
+ICONE_EXE = None
+if sys.platform == "win32":
+    candidato = os.path.join(ICONE, "gc3d.ico")
+    if os.path.isfile(candidato):
+        ICONE_EXE = candidato
+        print(f"[gc3d.spec] icone: {candidato}")
+    else:
+        print(f"[gc3d.spec] sem icone: {candidato} nao existe")
 
-gui_analysis = Analysis(  # noqa: F821
-    [os.path.join(PROJECT_ROOT, "gc3d_gui.py")],
-    pathex=[SRC],
+analysis = Analysis(  # noqa: F821
+    [os.path.join(PROJECT_ROOT, "gc3d_app.py")],
+    pathex=[PROJECT_ROOT, SRC],
     binaries=[],
-    datas=GUI_DATAS,
-    hiddenimports=GUI_HIDDEN,
+    datas=DATAS,
+    hiddenimports=HIDDEN,
     excludes=EXCLUDES,
     noarchive=False,
 )
 
-cli_pyz = PYZ(cli_analysis.pure, cli_analysis.zipped_data)  # noqa: F821
-gui_pyz = PYZ(gui_analysis.pure, gui_analysis.zipped_data)  # noqa: F821
+pyz = PYZ(analysis.pure, analysis.zipped_data)  # noqa: F821
 
-cli_exe = EXE(  # noqa: F821
-    cli_pyz,
-    cli_analysis.scripts,
-    cli_analysis.binaries,
-    cli_analysis.datas,
+exe = EXE(  # noqa: F821
+    pyz,
+    analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
     [],
     name="gc3d",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
-)
-
-gui_exe = EXE(  # noqa: F821
-    gui_pyz,
-    gui_analysis.scripts,
-    gui_analysis.binaries,
-    gui_analysis.datas,
-    [],
-    name="gc3d-gui",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    # No Windows isso evita a janela preta de console aparecer atras da interface.
+    # Subsistema grafico: sem isso uma janela preta de console apareceria atras
+    # da interface no Windows a cada abertura por clique duplo. A saida da linha
+    # de comando e recuperada em tempo de execucao por gc3d_app.attach_console(),
+    # que explica o mecanismo em detalhe.
     console=False,
+    icon=ICONE_EXE,
 )

@@ -14,6 +14,16 @@
 /build/*/pyinstaller/
 *.manifest
 
+# Arvore intermediaria do AppImage e a ferramenta baixada para empacota-lo.
+# Ambas sao recriadas por build/linux/appimage.sh quando faltam.
+/build/linux/AppDir/
+/build/linux/appimagetool-*.AppImage
+
+# Folha de contato do icone, gerada por build/icone/gerar_icone.py so para
+# conferir a olho como o desenho encolhe. O gc3d.png e o gc3d.ico ao lado dela
+# SAO versionados, para o build nao depender do Pillow.
+/build/icone/prova.png
+
 # Python
 __pycache__/
 *.py[cod]

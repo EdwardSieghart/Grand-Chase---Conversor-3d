@@ -1,0 +1,56 @@
+name: testes
+
+# Roda a suite nos dois sistemas em que o programa e distribuido. O Windows entra
+# aqui porque metade do que pode dar errado neste projeto e especifico dele:
+# caminho com barra invertida, '%' em caminho de INI, e o remendo do console em
+# gc3d_app.py.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: ${{ matrix.nome }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nome: Linux
+            runner: ubuntu-latest
+          - nome: Windows
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # O conversor nao tem dependencia nenhuma; o tkinterdnd2 entra so para os
+      # testes do arrastar e soltar nao serem pulados.
+      - name: Instalar dependencias de teste
+        run: python -m pip install --quiet pytest "tkinterdnd2==0.6.2"
+
+      # Sem isto os testes que abrem janela seriam pulados no Linux, e justamente
+      # eles cobrem a gravacao das preferencias. O runner do Windows ja tem sessao
+      # grafica, entao la nao e preciso.
+      - name: Tela virtual (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xvfb python3-tk
+
+      - name: Rodar a suite
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}python -m pytest tests -q
+
+      # Confere o programa pelo codigo-fonte, antes de qualquer empacotamento: se
+      # falhar aqui, o problema e do codigo, nao do PyInstaller.
+      - name: Conferir a linha de comando
+        run: |
+          python gc3d_app.py --version
+          python gc3d_app.py config

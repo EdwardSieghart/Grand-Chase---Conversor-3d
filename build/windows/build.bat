@@ -1,9 +1,9 @@
 @echo off
-REM Gera os executaveis do Grand Chase 3D Importer para WINDOWS.
+REM Gera o executavel do Grand Chase 3D Importer para WINDOWS.
 REM
-REM Saida em dist\windows\:
-REM   gc3d.exe      - linha de comando
-REM   gc3d-gui.exe  - interface grafica
+REM Saida: dist\windows\gc3d.exe — um arquivo unico, que abre a interface quando
+REM chamado sem argumentos e age como linha de comando quando recebe um
+REM subcomando (convert, batch ou info).
 REM
 REM Requisitos: Python 3.10 ou mais novo, instalado com a opcao
 REM "tcl/tk and IDLE" marcada (vem marcada por padrao; e o que fornece a
@@ -12,6 +12,10 @@ REM
 REM Uso:
 REM   build\windows\build.bat
 REM   build\windows\build.bat --test
+REM
+REM Nao e preciso rodar isto a mao para publicar: o GitHub Actions compila o .exe
+REM num Windows de verdade a cada tag (veja .github/workflows/release.yml). Este
+REM script serve para quem quiser compilar na propria maquina.
 
 setlocal
 cd /d "%~dp0..\.."
@@ -45,8 +49,8 @@ if errorlevel 1 (
     echo     %PYTHON% -m pip install pyinstaller
     echo.
     echo Sem ele o programa continua funcionando pelo Python:
-    echo     %PYTHON% gc3d_gui.py
-    echo     %PYTHON% gc3d_cli.py --help
+    echo     %PYTHON% gc3d_app.py
+    echo     %PYTHON% gc3d_app.py --help
     exit /b 1
 )
 
@@ -65,11 +69,11 @@ if errorlevel 1 (
 )
 
 echo.
-echo ==^> Pronto. Executaveis em dist\windows\:
+echo ==^> Pronto:
 dir /b dist\windows
 echo.
 echo Teste rapido:
 echo     dist\windows\gc3d.exe --version
-echo     dist\windows\gc3d-gui.exe
+echo     dist\windows\gc3d.exe              (abre a interface)
 
 endlocal
